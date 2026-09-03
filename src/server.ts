@@ -2,8 +2,87 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 import { loadAllManifests, loadConfig, type SlothConfig } from "./config.js";
-import { buildTaxonomy, ToolIndex } from "./indexer.js";
+import { buildTaxonomy, formatCompactSignature, ToolIndex } from "./indexer.js";
 import { ProcessPool } from "./pool.js";
+
+/**
+ * Normalizes a parameter key string for fuzzy comparison (e.g. container_name -> containername)
+ */
+function normalizeKey(key: string): string {
+  return key.toLowerCase().replace(/[-_]/g, "");
+}
+
+/**
+ * Speculative argument repair:
+ * 1. Fuzzy key matching (e.g. container_name or containerId -> container)
+ * 2. Type coercion (string numbers -> numbers, string booleans -> booleans)
+ */
+export function repairToolArguments(
+  providedArgs: Record<string, unknown>,
+  schema: Record<string, unknown> | undefined
+): { repaired: Record<string, unknown>; remappedKeys: Record<string, string> } {
+  if (!schema || typeof schema !== "object") {
+    return { repaired: { ...providedArgs }, remappedKeys: {} };
+  }
+
+  const properties = (schema.properties || {}) as Record<string, Record<string, unknown>>;
+  const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
+  const propertyKeys = Object.keys(properties);
+
+  const repaired: Record<string, unknown> = { ...providedArgs };
+  const remappedKeys: Record<string, string> = {};
+
+  // 1. Key remapping for expected properties
+  for (const expectedKey of propertyKeys) {
+    if (repaired[expectedKey] !== undefined) continue;
+
+    const normExpected = normalizeKey(expectedKey);
+
+    // Look for matching key in providedArgs
+    for (const providedKey of Object.keys(repaired)) {
+      if (properties[providedKey] !== undefined) continue; // Do not steal valid expected keys
+
+      const normProvided = normalizeKey(providedKey);
+
+      // Match conditions: identical normalized, or contains (e.g. container_name vs container)
+      if (
+        normProvided === normExpected ||
+        normProvided === `${normExpected}name` ||
+        normProvided === `${normExpected}id` ||
+        normProvided === `target${normExpected}`
+      ) {
+        repaired[expectedKey] = repaired[providedKey];
+        delete repaired[providedKey];
+        remappedKeys[providedKey] = expectedKey;
+        break;
+      }
+    }
+  }
+
+  // 2. Type coercion for mapped properties
+  for (const [key, propDef] of Object.entries(properties)) {
+    const val = repaired[key];
+    if (val === undefined || val === null) continue;
+
+    const expectedType = propDef.type;
+
+    // String to number coercion
+    if ((expectedType === "number" || expectedType === "integer") && typeof val === "string") {
+      const num = Number(val);
+      if (!Number.isNaN(num)) {
+        repaired[key] = num;
+      }
+    }
+
+    // String to boolean coercion
+    if (expectedType === "boolean" && typeof val === "string") {
+      if (val.toLowerCase() === "true") repaired[key] = true;
+      if (val.toLowerCase() === "false") repaired[key] = false;
+    }
+  }
+
+  return { repaired, remappedKeys };
+}
 
 export interface SlothServerInstance {
   server: McpServer;
@@ -25,7 +104,12 @@ export interface CreateServerOptions {
 export function createSlothServer(options: CreateServerOptions = {}): SlothServerInstance {
   let config = options.config || loadConfig();
   const toolIndex = new ToolIndex();
-  const pool = new ProcessPool({ idleTimeoutMs: config.idleTimeoutMs });
+  const pool = new ProcessPool({
+    idleTimeoutMs: config.idleTimeoutMs,
+    onToolsChanged: () => {
+      reload();
+    },
+  });
 
   const reload = () => {
     config = options.config || loadConfig();
@@ -157,8 +241,18 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
       }),
     },
     async ({ server, tool, arguments: args }) => {
+      const toolDef = toolIndex.getTool(server, tool);
+      const { repaired: finalArgs, remappedKeys } = repairToolArguments(
+        args || {},
+        toolDef?.inputSchema as Record<string, unknown> | undefined
+      );
+
+      if (Object.keys(remappedKeys).length > 0) {
+        console.error(`[SlothServer] Auto-repaired arguments for '${server}:${tool}':`, remappedKeys);
+      }
+
       try {
-        const result = await pool.executeTool(server, tool, args || {});
+        const result = await pool.executeTool(server, tool, finalArgs);
         const callResult = result as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | undefined;
 
         if (callResult && Array.isArray(callResult.content) && callResult.content.length > 0) {
@@ -187,12 +281,17 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
         const stderrLines = pool.getStderr(server);
         const stderrDetails = stderrLines.length > 0 ? `\n\nRecent stderr:\n${stderrLines.join("\n")}` : "";
 
+        // Provide self-correcting signature if tool definition is known
+        const signatureHint = toolDef
+          ? `\n\nExpected Tool Signature:\n${formatCompactSignature(server, toolDef)}`
+          : "";
+
         return {
           isError: true,
           content: [
             {
               type: "text" as const,
-              text: `Execution failed for '${server}:${tool}': ${message}${stderrDetails}`,
+              text: `Execution failed for '${server}:${tool}': ${message}${signatureHint}${stderrDetails}`,
             },
           ],
         };

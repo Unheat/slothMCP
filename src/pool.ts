@@ -1,6 +1,6 @@
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import type { ServerConfig } from "./config.js";
+import { computeSchemaFingerprint, saveManifest, type ServerConfig, type ToolDefinition } from "./config.js";
 
 /**
  * Ring buffer to retain the last N lines of downstream stderr
@@ -45,6 +45,7 @@ export interface ProcessPoolOptions {
   idleTimeoutMs?: number; // default 300,000 (5 min)
   onServerReaped?: (serverName: string) => void;
   onServerError?: (serverName: string, error: Error) => void;
+  onToolsChanged?: (serverName: string, tools: ToolDefinition[]) => void;
 }
 
 /**
@@ -58,12 +59,14 @@ export class ProcessPool {
   private idleTimeoutMs: number;
   private onServerReaped?: (serverName: string) => void;
   private onServerError?: (serverName: string, error: Error) => void;
+  private onToolsChanged?: (serverName: string, tools: ToolDefinition[]) => void;
   private isShuttingDown = false;
 
   constructor(options: ProcessPoolOptions = {}) {
     this.idleTimeoutMs = options.idleTimeoutMs ?? 300_000;
     this.onServerReaped = options.onServerReaped;
     this.onServerError = options.onServerError;
+    this.onToolsChanged = options.onToolsChanged;
 
     // Register process exit listeners
     this.registerExitHooks();
@@ -208,10 +211,43 @@ export class ProcessPool {
       stderr: "pipe",
     });
 
-    const client = new Client({
-      name: `sloth-gateway-client-${serverName}`,
-      version: "0.1.0",
-    });
+    const client = new Client(
+      {
+        name: `sloth-gateway-client-${serverName}`,
+        version: "0.1.0",
+      },
+      {
+        listChanged: {
+          tools: {
+            onChanged: async (error, updatedTools) => {
+              if (error) {
+                console.error(`[SlothProcessPool] Failed to refresh tools for '${serverName}':`, error);
+                return;
+              }
+
+              if (Array.isArray(updatedTools)) {
+                console.error(`[SlothProcessPool] Received tools/list_changed for '${serverName}'. Refreshing ${updatedTools.length} tools...`);
+                const toolsDef: ToolDefinition[] = updatedTools.map((t) => ({
+                  name: t.name,
+                  description: t.description,
+                  inputSchema: (t.inputSchema as Record<string, unknown>) || {},
+                }));
+
+                const fingerprint = computeSchemaFingerprint(toolsDef);
+                saveManifest({
+                  server: serverName,
+                  fingerprint,
+                  indexedAt: Date.now(),
+                  tools: toolsDef,
+                });
+
+                this.onToolsChanged?.(serverName, toolsDef);
+              }
+            },
+          },
+        },
+      }
+    );
 
     // Capture stderr stream into ring buffer
     if (transport.stderr) {

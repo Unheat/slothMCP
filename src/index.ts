@@ -1,6 +1,7 @@
 import { createSlothServer } from "./server.js";
 
 export * from "./config.js";
+export * from "./doctor.js";
 export * from "./harnesses.js";
 export * from "./indexer.js";
 export * from "./pool.js";

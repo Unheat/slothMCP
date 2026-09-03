@@ -12,6 +12,7 @@ import {
   type ServerConfig,
   type ToolDefinition,
 } from "../src/config.js";
+import { runDoctor } from "../src/doctor.js";
 import {
   detectHarnesses,
   installSlothToHarness,
@@ -364,6 +365,31 @@ program
     } else {
       console.log(`[Sloth] Sloth was not found or already uninstalled from ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
     }
+  });
+
+/**
+ * Command: sloth doctor
+ */
+program
+  .command("doctor")
+  .description("Perform health checks on Node runtime, config files, client harnesses, and server paths")
+  .action(() => {
+    const checks = runDoctor();
+
+    console.log("\nSlothMCP System & Health Doctor:");
+    console.log("─".repeat(80));
+    console.log(
+      `${"Category".padEnd(16)} ${"Status".padEnd(10)} ${"Check Name".padEnd(30)} Details`
+    );
+    console.log("─".repeat(80));
+
+    for (const c of checks) {
+      const statusSymbol = c.status === "ok" ? "✓ OK" : c.status === "warn" ? "⚠ WARN" : "✗ ERROR";
+      console.log(
+        `${c.category.padEnd(16)} ${statusSymbol.padEnd(10)} ${c.name.padEnd(30)} ${c.message}`
+      );
+    }
+    console.log("─".repeat(80) + "\n");
   });
 
 /**
