@@ -12,6 +12,14 @@ import {
   type ServerConfig,
   type ToolDefinition,
 } from "../src/config.js";
+import {
+  detectHarnesses,
+  installSlothToHarness,
+  readHarnessServers,
+  SUPPORTED_HARNESSES,
+  uninstallSlothFromHarness,
+  type HarnessId,
+} from "../src/harnesses.js";
 import { ProcessPool } from "../src/pool.js";
 import { createSlothServer } from "../src/server.js";
 
@@ -214,6 +222,148 @@ program
     }
 
     console.log("[Sloth] Sync complete.");
+  });
+
+/**
+ * Command: sloth harnesses
+ */
+program
+  .command("harnesses")
+  .description("Scan and list all detected AI client harnesses (Claude Desktop, Cursor, VS Code, etc.)")
+  .action(() => {
+    const statuses = detectHarnesses();
+
+    console.log("\nDetected AI Client Harnesses:");
+    console.log("─".repeat(85));
+    console.log(
+      `${"Harness ID".padEnd(18)} ${"Installed".padEnd(12)} ${"Sloth Active".padEnd(15)} ${"Servers".padEnd(10)} ${"Path"}`
+    );
+    console.log("─".repeat(85));
+
+    for (const st of statuses) {
+      const installedStr = st.installed ? "Yes" : "No";
+      const slothStr = st.hasSlothConfigured ? "Configured" : "Not yet";
+      console.log(
+        `${st.id.padEnd(18)} ${installedStr.padEnd(12)} ${slothStr.padEnd(15)} ${String(st.serverCount).padEnd(10)} ${st.configPath}`
+      );
+    }
+    console.log("─".repeat(85) + "\n");
+  });
+
+/**
+ * Command: sloth import [harness]
+ */
+program
+  .command("import [harness]")
+  .description("Import downstream MCP servers from a client harness config, preserving enabled and disabled states")
+  .option("-s, --sync", "Automatically introspect tools and build manifest cache after import", true)
+  .action(async (targetHarness?: string, options?: { sync?: boolean }) => {
+    const harnessesToImport: HarnessId[] = targetHarness
+      ? [targetHarness as HarnessId]
+      : (Object.keys(SUPPORTED_HARNESSES) as HarnessId[]);
+
+    const config = loadConfig();
+    let totalImported = 0;
+
+    for (const hId of harnessesToImport) {
+      if (!SUPPORTED_HARNESSES[hId]) {
+        console.warn(`[Sloth] Unknown harness '${hId}'. Supported: ${Object.keys(SUPPORTED_HARNESSES).join(", ")}`);
+        continue;
+      }
+
+      const records = readHarnessServers(hId);
+      if (records.length === 0) {
+        continue;
+      }
+
+      console.log(`[Sloth] Found ${records.length} server(s) in ${SUPPORTED_HARNESSES[hId].displayName}:`);
+
+      for (const rec of records) {
+        const statusLabel = rec.config.disabled ? "[disabled]" : "[enabled]";
+        console.log(`  • ${rec.name} ${statusLabel} -> ${rec.config.command} ${(rec.config.args || []).join(" ")}`);
+        config.servers[rec.name] = rec.config;
+        totalImported++;
+      }
+    }
+
+    if (totalImported === 0) {
+      console.log("[Sloth] No servers found to import.");
+      return;
+    }
+
+    saveConfig(config);
+    console.log(`\n[Sloth] Successfully imported ${totalImported} server(s) into Sloth configuration.`);
+
+    // Run sync if requested
+    if (options?.sync) {
+      console.log("[Sloth] Introspecting imported server schemas...");
+      const pool = new ProcessPool();
+      pool.updateServerConfigs(config.servers);
+
+      for (const [name, srv] of Object.entries(config.servers)) {
+        if (srv.disabled) {
+          console.log(`[Sloth] Skipping disabled server '${name}' from initial spawn.`);
+          continue;
+        }
+
+        try {
+          const rawTools = (await pool.introspectTools(name, true)) as ToolDefinition[];
+          const fingerprint = computeSchemaFingerprint(rawTools);
+          const manifest: ManifestData = {
+            server: name,
+            fingerprint,
+            indexedAt: Date.now(),
+            tools: rawTools,
+          };
+          saveManifest(manifest);
+          console.log(`[Sloth] Cached ${rawTools.length} tool(s) for '${name}'.`);
+        } catch (err) {
+          console.warn(`[Sloth] Note: '${name}' could not be introspected right now (${err instanceof Error ? err.message : String(err)}).`);
+        }
+      }
+    }
+
+    console.log("[Sloth] Import complete. Use `sloth list` to view.");
+  });
+
+/**
+ * Command: sloth install <harness>
+ */
+program
+  .command("install <harness>")
+  .description("Safely configure an AI harness to point to SlothMCP (creates timestamped .bak backup)")
+  .action((harnessId: string) => {
+    if (!SUPPORTED_HARNESSES[harnessId as HarnessId]) {
+      console.error(`[Sloth] Unsupported harness '${harnessId}'. Supported: ${Object.keys(SUPPORTED_HARNESSES).join(", ")}`);
+      process.exit(1);
+    }
+
+    const res = installSlothToHarness(harnessId as HarnessId);
+    console.log(`[Sloth] Successfully installed SlothMCP gateway into ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}!`);
+    console.log(`[Sloth] Target Config: ${res.configPath}`);
+    if (res.backupPath) {
+      console.log(`[Sloth] Backup created: ${res.backupPath}`);
+    }
+  });
+
+/**
+ * Command: sloth uninstall <harness>
+ */
+program
+  .command("uninstall <harness>")
+  .description("Remove SlothMCP gateway entry from an AI harness configuration")
+  .action((harnessId: string) => {
+    if (!SUPPORTED_HARNESSES[harnessId as HarnessId]) {
+      console.error(`[Sloth] Unsupported harness '${harnessId}'.`);
+      process.exit(1);
+    }
+
+    const removed = uninstallSlothFromHarness(harnessId as HarnessId);
+    if (removed) {
+      console.log(`[Sloth] Successfully uninstalled SlothMCP from ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
+    } else {
+      console.log(`[Sloth] Sloth was not found or already uninstalled from ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
+    }
   });
 
 /**
