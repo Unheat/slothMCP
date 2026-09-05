@@ -4,7 +4,7 @@
 
 **A sub-millisecond, zero-infrastructure Model Context Protocol (MCP) Gateway that cuts LLM token bloat by 85% and idle RAM by 98%.**
 
-[![CI](https://github.com/dangtruongan/slothMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/dangtruongan/slothMCP)
+[![CI](https://github.com/Unheat/slothMCP/actions/workflows/ci.yml/badge.svg)](https://github.com/Unheat/slothMCP/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-green.svg)](https://nodejs.org/)
