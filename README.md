@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-green.svg)](https://nodejs.org/)
 
-[Quickstart](#quickstart) • [Benchmarks](#benchmarks) • [Architecture](#architecture) • [CLI Commands](#cli-reference) • [Harness Migration](#one-click-ide-migration)
+[Quickstart](#quickstart) • [Benchmarks](docs/benchmarks.md) • [Architecture](docs/architecture.md) • [Client Migration](docs/client-migration.md) • [Configuration Reference](docs/configuration.md) • [Output Shaper](docs/output-shaper.md)
 
 </div>
 
@@ -167,6 +167,18 @@ The model receives 100% global capability visibility upfront for just ~40 tokens
 | **`sloth install`**| `sloth install <harness> [--migrate]` | Configures IDE to use SlothMCP with automated rolling `.bak` backup. |
 | **`sloth uninstall`**| `sloth uninstall <harness> [--restore]` | Removes Sloth from IDE config, or restores original configuration from backup. |
 | **`sloth doctor`** | `sloth doctor` | Comprehensive health check on Node runtime, paths, configs, and harnesses. |
+
+---
+
+## Documentation
+
+For in-depth architectural proofs, protocol specifications, benchmarks, and configuration guides:
+
+- 📖 **[System Architecture & Protocol](docs/architecture.md)** — Stdio JSON-RPC boundary, 3 meta-tools, lazy state machine, single-flight locking.
+- 📊 **[Empirical Benchmarks & Token Proof](docs/benchmarks.md)** — Mathematical token derivation, 1,000-query latency percentiles, precision metrics.
+- 🚀 **[Client Harness Migration Guide](docs/client-migration.md)** — One-click setup and rollback for Cursor, Claude Desktop, VS Code, and Windsurf.
+- ⚙️ **[Configuration & CLI Reference](docs/configuration.md)** — Complete `mcp.json` schema, on-demand vs always-on lifecycle, command matrix.
+- 🛡️ **[Output Shaper & Context Guard](docs/output-shaper.md)** — In-memory tabular shape compression and 20/80 sandwich slicing.
 
 ---
 
