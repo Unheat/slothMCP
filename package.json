@@ -7,10 +7,10 @@
     "node": ">=20"
   },
   "bin": {
-    "sloth": "./bin/sloth.ts"
+    "sloth": "./build/bin/sloth.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x build/bin/sloth.js",
     "start": "node build/src/index.js",
     "test": "vitest run",
     "test:watch": "vitest"

@@ -3,3 +3,6 @@ build/
 .env
 reference/
 .zcode/
+AGENTS.md
+CLAUDE.md
+CODEX.md
