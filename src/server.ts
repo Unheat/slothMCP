@@ -8,6 +8,9 @@ import { shapeToolOutput } from "./shaper.js";
 
 /**
  * Normalizes a parameter key string for fuzzy comparison (e.g. container_name -> containername)
+ *
+ * @param key - Raw parameter name string
+ * @returns Lowercase alphanumeric string with hyphens and underscores stripped
  */
 function normalizeKey(key: string): string {
   return key.toLowerCase().replace(/[-_]/g, "");
@@ -17,6 +20,10 @@ function normalizeKey(key: string): string {
  * Speculative argument repair:
  * 1. Fuzzy key matching (e.g. container_name or containerId -> container)
  * 2. Type coercion (string numbers -> numbers, string booleans -> booleans)
+ *
+ * @param providedArgs - Argument dictionary supplied by the LLM
+ * @param schema - Raw JSONSchema object for the target tool
+ * @returns Object containing repaired argument dictionary and mapping record of remapped keys
  */
 export function repairToolArguments(
   providedArgs: Record<string, unknown>,
@@ -101,6 +108,11 @@ export interface CreateServerOptions {
 
 /**
  * Creates and configures the SlothMCP Gateway Server.
+ * Initialises the in-memory BM25 indexer, process pool, dynamic taxonomy generator,
+ * argument auto-repair handler, and output shaper.
+ *
+ * @param options - Optional server configuration overrides and custom manifests for testing
+ * @returns Configured SlothServerInstance with start, stop, and reload lifecycle controls
  */
 export function createSlothServer(options: CreateServerOptions = {}): SlothServerInstance {
   let config = options.config || loadConfig();

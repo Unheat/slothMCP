@@ -93,6 +93,8 @@ export interface DetectedHarnessStatus {
 
 /**
  * Detects all client harnesses on the host and their configuration status.
+ *
+ * @returns Array of DetectedHarnessStatus records for all supported IDEs and CLIs
  */
 export function detectHarnesses(): DetectedHarnessStatus[] {
   const result: DetectedHarnessStatus[] = [];
@@ -136,6 +138,10 @@ export interface ImportedServerRecord {
 /**
  * Reads and maps all downstream MCP servers from a harness config,
  * preserving both enabled and disabled server states.
+ *
+ * @param harnessId - Identifier of target harness (e.g. 'cursor', 'claude-desktop')
+ * @param customConfigPath - Optional custom configuration file path for testing
+ * @returns Array of ImportedServerRecord objects containing name and ServerConfig
  */
 export function readHarnessServers(harnessId: HarnessId, customConfigPath?: string): ImportedServerRecord[] {
   const def = SUPPORTED_HARNESSES[harnessId];
@@ -184,6 +190,9 @@ export function readHarnessServers(harnessId: HarnessId, customConfigPath?: stri
 
 /**
  * Finds the most recent rolling .bak file for a config path.
+ *
+ * @param configPath - Absolute path of the target configuration file
+ * @returns Path to the most recent backup file, or null if none exist
  */
 export function findLatestBackup(configPath: string): string | null {
   const dir = dirname(configPath);
@@ -223,6 +232,10 @@ export interface InstallOptions {
 /**
  * Safely injects SlothMCP into a client harness with an automated timestamped backup.
  * Supports `--migrate` mode to import existing servers and clean up the client config.
+ *
+ * @param harnessId - Identifier of target client harness
+ * @param options - InstallOptions controlling migration, custom path, or custom entry
+ * @returns InstallResult containing backupPath, configPath, and imported server count
  */
 export function installSlothToHarness(harnessId: HarnessId, options: InstallOptions = {}): InstallResult {
   const def = SUPPORTED_HARNESSES[harnessId];
@@ -295,6 +308,10 @@ export interface RestoreResult {
 
 /**
  * Restores a client harness config from its most recent .bak backup.
+ *
+ * @param harnessId - Identifier of target harness
+ * @param customConfigPath - Optional custom configuration file path for testing
+ * @returns RestoreResult with restored boolean status and backupUsed path
  */
 export function restoreHarnessFromBackup(harnessId: HarnessId, customConfigPath?: string): RestoreResult {
   const def = SUPPORTED_HARNESSES[harnessId];
@@ -321,6 +338,10 @@ export function restoreHarnessFromBackup(harnessId: HarnessId, customConfigPath?
 
 /**
  * Uninstalls SlothMCP from a client harness by removing the 'sloth' entry.
+ *
+ * @param harnessId - Identifier of target harness
+ * @param customConfigPath - Optional custom configuration file path for testing
+ * @returns Boolean indicating whether sloth was found and removed
  */
 export function uninstallSlothFromHarness(harnessId: HarnessId, customConfigPath?: string): boolean {
   const def = SUPPORTED_HARNESSES[harnessId];

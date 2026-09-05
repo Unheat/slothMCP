@@ -1,6 +1,27 @@
 import MiniSearch from "minisearch";
 import type { ManifestData, ToolDefinition } from "./config.js";
 
+/** BM25 ranking boost for tool name matches (highest weight) */
+export const BOOST_TOOL_NAME = 5.0;
+
+/** BM25 ranking boost for exact canonical ID matches ("server:tool") */
+export const BOOST_CANONICAL_ID = 4.0;
+
+/** BM25 ranking boost for input parameter names */
+export const BOOST_PARAMS = 2.0;
+
+/** BM25 ranking boost for tool descriptions */
+export const BOOST_DESCRIPTION = 1.5;
+
+/** BM25 ranking boost for server tags */
+export const BOOST_TAGS = 1.5;
+
+/** Default number of candidate tools returned by search */
+export const DEFAULT_SEARCH_LIMIT = 5;
+
+/** MiniSearch fuzzy match tolerance threshold */
+export const FUZZY_SEARCH_THRESHOLD = 0.2;
+
 /**
  * Internal index document representation
  */
@@ -16,6 +37,9 @@ export interface IndexedToolDoc {
 
 /**
  * Formats a JSONSchema parameter property into a compact TypeScript-like type string.
+ *
+ * @param prop - JSONSchema property definition object
+ * @returns Concise human-readable TypeScript type identifier string
  */
 export function formatParamType(prop: Record<string, unknown> | undefined): string {
   if (!prop || typeof prop !== "object") return "unknown";
@@ -41,6 +65,10 @@ export function formatParamType(prop: Record<string, unknown> | undefined): stri
 /**
  * Converts a verbose ToolDefinition with JSONSchema into a compact 1-line TypeScript AST signature.
  * Example: docker.restart(container: string, timeout?: number): Restart a container
+ *
+ * @param server - Server namespace identifier
+ * @param tool - Tool definition object with inputSchema
+ * @returns One-line compact TypeScript function signature string
  */
 export function formatCompactSignature(server: string, tool: ToolDefinition): string {
   const schema = tool.inputSchema as Record<string, unknown> | undefined;
@@ -65,6 +93,9 @@ export function formatCompactSignature(server: string, tool: ToolDefinition): st
 /**
  * Generates a deterministic hierarchical namespace directory tree from manifest definitions.
  * Sorted alphabetically by server and tool names to ensure 100% prompt-caching stability.
+ *
+ * @param manifests - Collection of ManifestData objects
+ * @returns Multi-line formatted namespace directory tree string
  */
 export function buildTaxonomy(manifests: Iterable<ManifestData>): string {
   const serverMap = new Map<string, string[]>();
@@ -121,20 +152,23 @@ export class ToolIndex {
       storeFields: ["id", "server", "toolName", "description"],
       searchOptions: {
         boost: {
-          toolName: 5.0,
-          id: 4.0,
-          paramsSummary: 2.0,
-          description: 1.5,
-          tags: 1.5,
+          toolName: BOOST_TOOL_NAME,
+          id: BOOST_CANONICAL_ID,
+          paramsSummary: BOOST_PARAMS,
+          description: BOOST_DESCRIPTION,
+          tags: BOOST_TAGS,
         },
         prefix: true,
-        fuzzy: 0.2,
+        fuzzy: FUZZY_SEARCH_THRESHOLD,
       },
     });
   }
 
   /**
-   * Rebuilds the index from a collection of manifests.
+   * Rebuilds the search index from a collection of manifests.
+   *
+   * @param manifests - Iterable collection of ManifestData
+   * @param serverTagsMap - Map of server name to search tags
    */
   public buildIndex(manifests: Iterable<ManifestData>, serverTagsMap: Record<string, string[]> = {}): void {
     this.miniSearch.removeAll();
@@ -173,6 +207,10 @@ export class ToolIndex {
 
   /**
    * Searches tools using BM25 ranking and returns compact signatures with deterministic tie-breaking.
+   *
+   * @param query - Keyword or natural language query string
+   * @param options - SearchOptions controlling namespace filter and limit
+   * @returns Array of SearchResult objects ordered by relevance
    */
   public search(query: string, options: SearchOptions = {}): SearchResult[] {
     const trimmed = query.trim();
@@ -180,7 +218,7 @@ export class ToolIndex {
       return [];
     }
 
-    const limit = options.limit ?? 5;
+    const limit = options.limit ?? DEFAULT_SEARCH_LIMIT;
     const filterNamespace = options.namespace?.toLowerCase();
 
     // Query MiniSearch
@@ -204,7 +242,7 @@ export class ToolIndex {
       });
     }
 
-    // Deterministic sorting: score descending, then canonical ID ascending
+    // Deterministic sorting: score descending, then canonical ID ascending to preserve prompt caching
     results.sort((a, b) => {
       if (Math.abs(b.score - a.score) > 0.0001) {
         return b.score - a.score;
@@ -217,6 +255,10 @@ export class ToolIndex {
 
   /**
    * Fast O(1) lookup for raw tool definition (used by get_tool_schema and execute_tool).
+   *
+   * @param server - Server namespace identifier
+   * @param toolName - Target tool name
+   * @returns ToolDefinition object if found, or null
    */
   public getTool(server: string, toolName: string): ToolDefinition | null {
     const id = `${server}:${toolName}`;

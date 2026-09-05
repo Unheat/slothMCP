@@ -8,23 +8,35 @@
  *    ensuring critical error summaries, stack traces, and exit codes at the bottom are never lost.
  */
 
+/** Default maximum characters before applying sandwich slicing (~7,500 tokens) */
+export const DEFAULT_MAX_CHARS = 30_000;
+
+/** Default proportion of character budget reserved for head (20% head / 80% tail) */
+export const DEFAULT_HEAD_RATIO = 0.2;
+
+/** Minimum object array length required to qualify for tabularization */
+export const MIN_UNIFORM_ARRAY_LENGTH = 3;
+
+/** Maximum items inspected when verifying schema uniformity across rows */
+export const MAX_UNIFORMITY_CHECK_ITEMS = 20;
+
 export interface ShaperOptions {
   maxChars?: number; // Hard character ceiling (default: 30,000 chars ~ 7,500 tokens)
   headRatio?: number; // Ratio of budget for head vs tail (default: 0.2 -> 20% head / 80% tail)
   enableTabularization?: boolean; // Default: true
 }
 
-const DEFAULT_MAX_CHARS = 30_000;
-const DEFAULT_HEAD_RATIO = 0.2;
-
 /**
  * Escapes a single CSV value following RFC 4180 rules.
+ *
+ * @param val - Primitive or serializable field value
+ * @returns RFC 4180 escaped CSV field string
  */
 export function escapeCsvField(val: unknown): string {
   if (val === null || val === undefined) return "";
   if (typeof val === "boolean" || typeof val === "number") return String(val);
 
-  let str = typeof val === "object" ? JSON.stringify(val) : String(val);
+  const str = typeof val === "object" ? JSON.stringify(val) : String(val);
 
   if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
     return `"${str.replace(/"/g, '""')}"`;
@@ -34,9 +46,12 @@ export function escapeCsvField(val: unknown): string {
 
 /**
  * Checks if a parsed JSON value is a uniform array of objects suitable for tabularization.
+ *
+ * @param arr - Any parsed JavaScript value
+ * @returns True if value is a uniform object array
  */
 export function isUniformObjectArray(arr: unknown): arr is Record<string, unknown>[] {
-  if (!Array.isArray(arr) || arr.length < 3) {
+  if (!Array.isArray(arr) || arr.length < MIN_UNIFORM_ARRAY_LENGTH) {
     return false;
   }
 
@@ -52,7 +67,7 @@ export function isUniformObjectArray(arr: unknown): arr is Record<string, unknow
   // Check uniformity and scalar values
   const keySet = new Set(keys);
 
-  for (let i = 0; i < Math.min(arr.length, 20); i++) {
+  for (let i = 0; i < Math.min(arr.length, MAX_UNIFORMITY_CHECK_ITEMS); i++) {
     const item = arr[i];
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return false;
@@ -77,6 +92,9 @@ export function isUniformObjectArray(arr: unknown): arr is Record<string, unknow
 /**
  * Converts a uniform JSON array of objects into a compact tabular representation
  * with a shape header: [N]{col1,col2,...}:\n...
+ *
+ * @param arr - Array of uniform objects
+ * @returns Formatted compact shape-header CSV string
  */
 export function tabularizeJsonArray(arr: Record<string, unknown>[]): string {
   const keys = Object.keys(arr[0]);
@@ -96,6 +114,11 @@ export function tabularizeJsonArray(arr: Record<string, unknown>[]): string {
  * Performs Head + Tail "Sandwich" truncation, preserving 20% head and 80% tail.
  * Critical for developer tools where compiler errors, test assertions, and stack traces
  * appear at the end of the output.
+ *
+ * @param content - Input raw text or log content
+ * @param maxChars - Budget limit in characters (default: 30,000)
+ * @param headRatio - Fraction of budget reserved for head (default: 0.2)
+ * @returns Sandwich-sliced output with clear omitted character notice
  */
 export function sandwichSlice(
   content: string,
@@ -127,6 +150,10 @@ export function sandwichSlice(
  * 1. Detects JSON payloads and tabularizes uniform arrays (saving 50-70% tokens).
  * 2. Minifies generic JSON objects (stripping redundant whitespace).
  * 3. Enforces the hard character ceiling using Smart Sandwich Slicing.
+ *
+ * @param rawContent - Raw text output from downstream tool execution
+ * @param options - ShaperOptions controlling limits and tabularization
+ * @returns Shaped output string
  */
 export function shapeToolOutput(rawContent: string, options: ShaperOptions = {}): string {
   const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;

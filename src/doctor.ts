@@ -3,6 +3,9 @@ import { existsSync } from "node:fs";
 import { getConfigDir, getManifestsDir, loadAllManifests, loadConfig } from "./config.js";
 import { detectHarnesses } from "./harnesses.js";
 
+/** Minimum supported Node.js major runtime version */
+export const MIN_SUPPORTED_NODE_MAJOR = 20;
+
 export interface HealthCheckResult {
   category: string;
   name: string;
@@ -12,6 +15,8 @@ export interface HealthCheckResult {
 
 /**
  * Checks system readiness, harness availability, and downstream server health.
+ *
+ * @returns Array of HealthCheckResult items representing categorized health diagnostics
  */
 export function runDoctor(): HealthCheckResult[] {
   const results: HealthCheckResult[] = [];
@@ -19,19 +24,19 @@ export function runDoctor(): HealthCheckResult[] {
   // 1. Check Node.js version
   const nodeVersion = process.version;
   const majorVersion = parseInt(nodeVersion.replace(/^v/, "").split(".")[0], 10);
-  if (majorVersion >= 20) {
+  if (majorVersion >= MIN_SUPPORTED_NODE_MAJOR) {
     results.push({
       category: "Environment",
       name: "Node.js Runtime",
       status: "ok",
-      message: `${nodeVersion} (Node >= 20 supported)`,
+      message: `${nodeVersion} (Node >= ${MIN_SUPPORTED_NODE_MAJOR} supported)`,
     });
   } else {
     results.push({
       category: "Environment",
       name: "Node.js Runtime",
       status: "error",
-      message: `${nodeVersion} is outdated. Node.js >= 20 is required.`,
+      message: `${nodeVersion} is outdated. Node.js >= ${MIN_SUPPORTED_NODE_MAJOR} is required.`,
     });
   }
 

@@ -4,6 +4,12 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 
+/** Default idle timeout before an inactive child process is reaped (5 minutes in milliseconds) */
+export const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
+
+/** Default on-demand lifecycle posture (lazy on-demand by default) */
+export const DEFAULT_ON_DEMAND = true;
+
 /**
  * Zod schema for individual MCP tool input parameters
  */
@@ -34,8 +40,8 @@ export type ServerConfig = z.infer<typeof ServerConfigSchema>;
  */
 export const SlothConfigSchema = z.object({
   $schema: z.string().optional(),
-  idleTimeoutMs: z.number().int().positive().optional().default(300_000), // default 5 minutes
-  defaultOnDemand: z.boolean().optional().default(true), // default on-demand lazy lifecycle
+  idleTimeoutMs: z.number().int().positive().optional().default(DEFAULT_IDLE_TIMEOUT_MS),
+  defaultOnDemand: z.boolean().optional().default(DEFAULT_ON_DEMAND),
   servers: z.record(z.string(), ServerConfigSchema).default({}),
 });
 
@@ -54,39 +60,69 @@ export const ManifestDataSchema = z.object({
 export type ManifestData = z.infer<typeof ManifestDataSchema>;
 
 /**
- * Computes a deterministic SHA-256 hash fingerprint of tool definitions
+ * Computes a deterministic SHA-256 hash fingerprint of tool definitions.
+ *
+ * @param tools - Array of ToolDefinition objects to fingerprint
+ * @returns 64-character hexadecimal SHA-256 hash string
  */
 export function computeSchemaFingerprint(tools: ToolDefinition[]): string {
-  // Sort tools by name to ensure hash stability
+  // Sort tools by name to ensure hash stability across calls
   const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex");
 }
 
 /**
- * Resolves configuration and cache directory paths (supports env var overrides for isolation in testing)
+ * Resolves configuration directory path (supports env var override for isolated testing).
+ *
+ * @returns Absolute filesystem path to the configuration directory
  */
 export function getConfigDir(): string {
   return process.env.SLOTH_CONFIG_DIR || join(homedir(), ".config", "sloth");
 }
 
+/**
+ * Resolves the path to the primary Sloth configuration file.
+ *
+ * @returns Absolute filesystem path to mcp.json
+ */
 export function getConfigPath(): string {
   return join(getConfigDir(), "mcp.json");
 }
 
+/**
+ * Resolves cache directory path (supports env var override for isolated testing).
+ *
+ * @returns Absolute filesystem path to the cache directory
+ */
 export function getCacheDir(): string {
   return process.env.SLOTH_CACHE_DIR || join(homedir(), ".cache", "sloth");
 }
 
+/**
+ * Resolves the directory where tool manifests are persisted.
+ *
+ * @returns Absolute filesystem path to manifests directory
+ */
 export function getManifestsDir(): string {
   return join(getCacheDir(), "manifests");
 }
 
+/**
+ * Resolves the cache file path for a specific downstream server.
+ *
+ * @param serverName - Identifier name of the server
+ * @returns Absolute filesystem path to the server's manifest JSON file
+ */
 export function getManifestPath(serverName: string): string {
   return join(getManifestsDir(), `${serverName}.json`);
 }
 
 /**
- * Atomic JSON write helper: writes to a .tmp file first, flushes, and renames atomically.
+ * Atomic JSON write helper: writes to a unique temporary file first,
+ * flushes, and renames atomically to prevent corrupted files during crashes or concurrent writes.
+ *
+ * @param filePath - Target absolute destination file path
+ * @param data - Serializable JavaScript object to write as JSON
  */
 export function writeJsonAtomic(filePath: string, data: unknown): void {
   const dir = dirname(filePath);
@@ -105,7 +141,7 @@ export function writeJsonAtomic(filePath: string, data: unknown): void {
       try {
         unlinkSync(tmpPath);
       } catch {
-        // ignore cleanup error
+        // ignore cleanup error on failure
       }
     }
     throw error;
@@ -114,14 +150,16 @@ export function writeJsonAtomic(filePath: string, data: unknown): void {
 
 /**
  * Loads and validates the Sloth configuration from disk.
- * Returns default empty configuration if the file does not exist.
+ * Returns default configuration if the file does not exist.
+ *
+ * @returns Validated SlothConfig object
  */
 export function loadConfig(): SlothConfig {
   const configPath = getConfigPath();
   if (!existsSync(configPath)) {
     return {
-      idleTimeoutMs: 300_000,
-      defaultOnDemand: true,
+      idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
+      defaultOnDemand: DEFAULT_ON_DEMAND,
       servers: {},
     };
   }
@@ -133,8 +171,8 @@ export function loadConfig(): SlothConfig {
   } catch (error) {
     console.error(`[SlothConfig] Error parsing config at ${configPath}:`, error);
     return {
-      idleTimeoutMs: 300_000,
-      defaultOnDemand: true,
+      idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
+      defaultOnDemand: DEFAULT_ON_DEMAND,
       servers: {},
     };
   }
@@ -142,6 +180,8 @@ export function loadConfig(): SlothConfig {
 
 /**
  * Saves the Sloth configuration atomically to disk.
+ *
+ * @param config - SlothConfig object to validate and persist
  */
 export function saveConfig(config: SlothConfig): void {
   const validated = SlothConfigSchema.parse(config);
@@ -150,6 +190,9 @@ export function saveConfig(config: SlothConfig): void {
 
 /**
  * Loads a cached manifest for a downstream server.
+ *
+ * @param serverName - Identifier name of the server
+ * @returns Validated ManifestData object if found, or null if not present
  */
 export function loadManifest(serverName: string): ManifestData | null {
   const manifestPath = getManifestPath(serverName);
@@ -169,6 +212,8 @@ export function loadManifest(serverName: string): ManifestData | null {
 
 /**
  * Saves a cached manifest for a downstream server atomically.
+ *
+ * @param manifest - ManifestData object to validate and persist
  */
 export function saveManifest(manifest: ManifestData): void {
   const validated = ManifestDataSchema.parse(manifest);
@@ -176,7 +221,10 @@ export function saveManifest(manifest: ManifestData): void {
 }
 
 /**
- * Deletes a cached manifest if it exists.
+ * Deletes a cached manifest if it exists on disk.
+ *
+ * @param serverName - Identifier name of the server whose manifest should be deleted
+ * @returns Boolean indicating whether a manifest was successfully deleted
  */
 export function deleteManifest(serverName: string): boolean {
   const manifestPath = getManifestPath(serverName);
@@ -193,6 +241,8 @@ export function deleteManifest(serverName: string): boolean {
 
 /**
  * Loads all available cached manifests from the manifests directory.
+ *
+ * @returns Map of serverName to ManifestData
  */
 export function loadAllManifests(): Map<string, ManifestData> {
   const manifestsDir = getManifestsDir();
