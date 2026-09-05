@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, saveConfig } from "../src/config.js";
 import {
+  ejectHarnessConfig,
   installSlothToHarness,
   readHarnessServers,
   restoreHarnessFromBackup,
@@ -199,5 +200,39 @@ describe("Harness Detection, Import & Installation", () => {
     expect(Object.keys(restoredConfig.mcpServers).sort()).toEqual(["aws-s3", "docker", "postgres"]);
     expect(restoredConfig.mcpServers.sloth).toBeUndefined();
     expect(restoredConfig.mcpServers["aws-s3"].disabled).toBe(true);
+  });
+
+  it("ejects servers back into harness using dynamic export when no backup file exists", () => {
+    const mockClaudeConfigPath = join(tempDir, "claude_eject_export.json");
+
+    // Client config currently only has sloth (e.g. fresh install or backup deleted)
+    const clientData = {
+      mcpServers: {
+        sloth: { command: "node", args: ["/path/to/sloth.js"] },
+      },
+    };
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(mockClaudeConfigPath, JSON.stringify(clientData, null, 2), "utf-8");
+
+    // Sloth config has 2 managed servers
+    const slothConfig = loadConfig();
+    slothConfig.servers["custom-db"] = { command: "db-cli", args: ["--pool"], disabled: false, tags: [] };
+    slothConfig.servers["custom-k8s"] = { command: "k8s-mcp", args: [], disabled: true, tags: [] };
+    saveConfig(slothConfig);
+
+    // Call ejectHarnessConfig without any backup file on disk
+    const ejectRes = ejectHarnessConfig("claude-desktop", mockClaudeConfigPath);
+
+    expect(ejectRes.restored).toBe(true);
+    expect(ejectRes.strategy).toBe("exported");
+    expect(ejectRes.ejectedCount).toBe(2);
+
+    // Verify Claude Desktop config now has the 2 servers and NO sloth
+    const updatedClientConfig = JSON.parse(readFileSync(mockClaudeConfigPath, "utf-8"));
+    expect(updatedClientConfig.mcpServers.sloth).toBeUndefined();
+    expect(updatedClientConfig.mcpServers["custom-db"]).toBeDefined();
+    expect(updatedClientConfig.mcpServers["custom-db"].command).toBe("db-cli");
+    expect(updatedClientConfig.mcpServers["custom-k8s"]).toBeDefined();
+    expect(updatedClientConfig.mcpServers["custom-k8s"].disabled).toBe(true);
   });
 });

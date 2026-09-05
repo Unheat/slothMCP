@@ -301,19 +301,30 @@ export function installSlothToHarness(harnessId: HarnessId, options: InstallOpti
   }
 }
 
-export interface RestoreResult {
+export interface EjectResult {
   restored: boolean;
+  strategy: "backup" | "exported" | "not_needed";
   backupUsed?: string;
+  ejectedCount: number;
 }
 
 /**
- * Restores a client harness config from its most recent .bak backup.
+ * Unified shared logic to put back all MCP servers into the client harness configuration
+ * and remove the 'sloth' gateway entry.
  *
- * @param harnessId - Identifier of target harness
+ * Strategy 1 (Priority): If a timestamped .bak backup exists, restores it byte-for-byte.
+ * Strategy 2 (Fallback): If no backup exists, dynamically exports all servers from Sloth's
+ * config back into the client harness file, cleanly removing the 'sloth' entry.
+ *
+ * Used by:
+ * 1. `sloth eject <harness>` (and `sloth restore <harness>`)
+ * 2. `sloth uninstall <harness> --restore` / `sloth uninstall <harness>`
+ *
+ * @param harnessId - Identifier of target client harness (e.g. 'cursor', 'claude-desktop')
  * @param customConfigPath - Optional custom configuration file path for testing
- * @returns RestoreResult with restored boolean status and backupUsed path
+ * @returns EjectResult detailing restored status, strategy used, and restored server count
  */
-export function restoreHarnessFromBackup(harnessId: HarnessId, customConfigPath?: string): RestoreResult {
+export function ejectHarnessConfig(harnessId: HarnessId, customConfigPath?: string): EjectResult {
   const def = SUPPORTED_HARNESSES[harnessId];
   if (!def) {
     throw new Error(`Unsupported harness '${harnessId}'.`);
@@ -322,18 +333,96 @@ export function restoreHarnessFromBackup(harnessId: HarnessId, customConfigPath?
   const configPath = customConfigPath || def.getPath();
   const latestBackup = findLatestBackup(configPath);
 
-  if (!latestBackup || !existsSync(latestBackup)) {
-    return { restored: false };
+  // Strategy 1: Restore from latest backup file if present
+  if (latestBackup && existsSync(latestBackup)) {
+    let ejectedCount = 0;
+    try {
+      const backupRaw = readFileSync(latestBackup, "utf-8");
+      const backupParsed = JSON.parse(backupRaw);
+      const backupServers = (backupParsed[def.configKey] || {}) as Record<string, unknown>;
+      ejectedCount = Object.keys(backupServers).filter((k) => k !== "sloth").length;
+    } catch {
+      // ignore parse error on backup count detection
+    }
+
+    copyFileSync(latestBackup, configPath);
+    try {
+      unlinkSync(latestBackup);
+    } catch {
+      // ignore cleanup error
+    }
+
+    return {
+      restored: true,
+      strategy: "backup",
+      backupUsed: latestBackup,
+      ejectedCount,
+    };
   }
 
-  copyFileSync(latestBackup, configPath);
+  // Strategy 2: Dynamic export fallback from Sloth config
+  if (!existsSync(configPath)) {
+    return { restored: false, strategy: "not_needed", ejectedCount: 0 };
+  }
+
   try {
-    unlinkSync(latestBackup);
-  } catch {
-    // ignore
-  }
+    const raw = readFileSync(configPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    const existingServers = (parsed[def.configKey] || {}) as Record<string, unknown>;
 
-  return { restored: true, backupUsed: latestBackup };
+    // Check if sloth was even installed
+    const hadSloth = Boolean(existingServers["sloth"]);
+    delete existingServers["sloth"];
+
+    // Export all servers from Sloth config into client config
+    const slothConfig = loadConfig();
+    let exportedCount = 0;
+
+    for (const [srvName, srvDef] of Object.entries(slothConfig.servers)) {
+      existingServers[srvName] = {
+        command: srvDef.command,
+        args: srvDef.args || [],
+        env: srvDef.env,
+        disabled: srvDef.disabled,
+      };
+      exportedCount++;
+    }
+
+    parsed[def.configKey] = existingServers;
+    writeJsonAtomic(configPath, parsed);
+
+    return {
+      restored: hadSloth || exportedCount > 0,
+      strategy: "exported",
+      ejectedCount: exportedCount,
+    };
+  } catch (err) {
+    console.error(`[SlothHarness] Failed to dynamically eject servers into ${def.displayName}:`, err);
+    return { restored: false, strategy: "not_needed", ejectedCount: 0 };
+  }
+}
+
+export interface RestoreResult {
+  restored: boolean;
+  backupUsed?: string;
+  ejectedCount?: number;
+}
+
+/**
+ * Restores a client harness config from its most recent .bak backup or exports servers back.
+ * Delegates to the unified ejectHarnessConfig logic.
+ *
+ * @param harnessId - Identifier of target harness
+ * @param customConfigPath - Optional custom configuration file path for testing
+ * @returns RestoreResult with restored boolean status and backupUsed path
+ */
+export function restoreHarnessFromBackup(harnessId: HarnessId, customConfigPath?: string): RestoreResult {
+  const res = ejectHarnessConfig(harnessId, customConfigPath);
+  return {
+    restored: res.restored,
+    backupUsed: res.backupUsed,
+    ejectedCount: res.ejectedCount,
+  };
 }
 
 /**

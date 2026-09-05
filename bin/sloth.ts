@@ -15,6 +15,7 @@ import {
 import { runDoctor } from "../src/doctor.js";
 import {
   detectHarnesses,
+  ejectHarnessConfig,
   installSlothToHarness,
   readHarnessServers,
   restoreHarnessFromBackup,
@@ -428,12 +429,36 @@ program
   });
 
 /**
+ * Command: sloth eject <harness> (alias: restore)
+ * Puts all MCP servers back into the client harness config and detaches SlothMCP.
+ */
+program
+  .command("eject <harness>")
+  .alias("restore")
+  .description("Eject/restore all MCP servers back into the client harness config and turn off SlothMCP")
+  .action((harnessId: string) => {
+    if (!SUPPORTED_HARNESSES[harnessId as HarnessId]) {
+      console.error(`[Sloth] Unsupported harness '${harnessId}'. Supported: ${Object.keys(SUPPORTED_HARNESSES).join(", ")}`);
+      process.exit(1);
+    }
+
+    const res = ejectHarnessConfig(harnessId as HarnessId);
+    if (res.restored) {
+      const sourceDesc = res.strategy === "backup" ? `from backup (${res.backupUsed})` : "exported from Sloth configuration";
+      console.log(`[Sloth] Successfully restored ${res.ejectedCount} server(s) back into ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName} (${sourceDesc})!`);
+      console.log(`[Sloth] SlothMCP has been cleanly detached from ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
+    } else {
+      console.log(`[Sloth] No servers or backup found to eject for ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
+    }
+  });
+
+/**
  * Command: sloth uninstall <harness>
  */
 program
   .command("uninstall <harness>")
   .description("Remove SlothMCP gateway entry from an AI harness configuration")
-  .option("-r, --restore", "Restore client configuration from the most recent .bak backup", false)
+  .option("-r, --restore", "Restore original client configuration (eject servers back and remove sloth)", false)
   .action((harnessId: string, options: { restore?: boolean }) => {
     if (!SUPPORTED_HARNESSES[harnessId as HarnessId]) {
       console.error(`[Sloth] Unsupported harness '${harnessId}'.`);
@@ -441,12 +466,12 @@ program
     }
 
     if (options.restore) {
-      const restResult = restoreHarnessFromBackup(harnessId as HarnessId);
-      if (restResult.restored) {
-        console.log(`[Sloth] Successfully restored original configuration for ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName} from backup (${restResult.backupUsed}).`);
+      const res = ejectHarnessConfig(harnessId as HarnessId);
+      if (res.restored) {
+        const sourceDesc = res.strategy === "backup" ? `from backup (${res.backupUsed})` : "exported from Sloth configuration";
+        console.log(`[Sloth] Successfully restored ${res.ejectedCount} server(s) back into ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName} (${sourceDesc})!`);
+        console.log(`[Sloth] SlothMCP uninstalled from ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
         return;
-      } else {
-        console.warn(`[Sloth] No backup file found for ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}. Falling back to normal removal.`);
       }
     }
 
