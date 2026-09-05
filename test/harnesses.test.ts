@@ -2,23 +2,38 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadConfig, saveConfig } from "../src/config.js";
 import {
   installSlothToHarness,
   readHarnessServers,
+  restoreHarnessFromBackup,
   SUPPORTED_HARNESSES,
   uninstallSlothFromHarness,
 } from "../src/harnesses.js";
 
 describe("Harness Detection, Import & Installation", () => {
   let tempDir: string;
+  let tempConfigDir: string;
+  let tempCacheDir: string;
 
   beforeEach(() => {
     tempDir = join(tmpdir(), `sloth-harness-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tempConfigDir = join(tmpdir(), `sloth-test-cfg-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tempCacheDir = join(tmpdir(), `sloth-test-cache-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+    process.env.SLOTH_CONFIG_DIR = tempConfigDir;
+    process.env.SLOTH_CACHE_DIR = tempCacheDir;
   });
 
   afterEach(() => {
     if (existsSync(tempDir)) {
       rmSync(tempDir, { recursive: true, force: true });
+    }
+    if (existsSync(tempConfigDir)) {
+      rmSync(tempConfigDir, { recursive: true, force: true });
+    }
+    if (existsSync(tempCacheDir)) {
+      rmSync(tempCacheDir, { recursive: true, force: true });
     }
   });
 
@@ -101,9 +116,13 @@ describe("Harness Detection, Import & Installation", () => {
     mkdirSync(tempDir, { recursive: true });
     writeFileSync(mockClaudeConfigPath, JSON.stringify(initialData, null, 2), "utf-8");
 
-    // 1. Install
+    // 1. Install without migrate (append mode)
     const customEntry = { command: "node", args: ["/path/to/sloth/build/index.js"] };
-    const installResult = installSlothToHarness("claude-desktop", mockClaudeConfigPath, customEntry);
+    const installResult = installSlothToHarness("claude-desktop", {
+      customConfigPath: mockClaudeConfigPath,
+      customEntry,
+      migrate: false,
+    });
 
     expect(installResult.configPath).toBe(mockClaudeConfigPath);
     expect(installResult.backupPath).toContain(".bak.");
@@ -114,7 +133,7 @@ describe("Harness Detection, Import & Installation", () => {
     expect(backupContent.mcpServers.github).toBeDefined();
     expect(backupContent.mcpServers.sloth).toBeUndefined();
 
-    // Verify target config has sloth injected
+    // Verify target config has sloth injected and github kept
     const updatedContent = JSON.parse(readFileSync(mockClaudeConfigPath, "utf-8"));
     expect(updatedContent.mcpServers.github).toBeDefined();
     expect(updatedContent.mcpServers.sloth).toBeDefined();
@@ -127,5 +146,58 @@ describe("Harness Detection, Import & Installation", () => {
     const postUninstall = JSON.parse(readFileSync(mockClaudeConfigPath, "utf-8"));
     expect(postUninstall.mcpServers.github).toBeDefined();
     expect(postUninstall.mcpServers.sloth).toBeUndefined();
+  });
+
+  it("migrates existing servers to Sloth, clears client config to ONLY sloth, and restores cleanly", () => {
+    const mockCursorConfigPath = join(tempDir, "cursor_mcp.json");
+
+    const initialData = {
+      mcpServers: {
+        docker: { command: "docker-mcp", args: ["--flag"], disabled: false },
+        postgres: { command: "postgres-mcp", args: [] },
+        "aws-s3": { command: "aws-s3-mcp", args: [], disabled: true },
+      },
+    };
+
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(mockCursorConfigPath, JSON.stringify(initialData, null, 2), "utf-8");
+
+    // Execute install with migrate: true
+    const customEntry = { command: "node", args: ["/path/to/sloth.js"] };
+    const result = installSlothToHarness("cursor", {
+      customConfigPath: mockCursorConfigPath,
+      customEntry,
+      migrate: true,
+    });
+
+    expect(result.importedCount).toBe(3);
+    expect(existsSync(result.backupPath)).toBe(true);
+
+    // Verify Sloth config now contains all 3 servers with their enabled/disabled states preserved
+    const slothConfig = loadConfig();
+    expect(slothConfig.servers["docker"]).toBeDefined();
+    expect(slothConfig.servers["docker"].disabled).toBe(false);
+    expect(slothConfig.servers["postgres"]).toBeDefined();
+    expect(slothConfig.servers["postgres"].disabled).toBe(false);
+    expect(slothConfig.servers["aws-s3"]).toBeDefined();
+    expect(slothConfig.servers["aws-s3"].disabled).toBe(true); // preserved as disabled!
+
+    // Verify Cursor client config now contains ONLY 'sloth'
+    const cursorConfigAfterMigrate = JSON.parse(readFileSync(mockCursorConfigPath, "utf-8"));
+    const serverKeys = Object.keys(cursorConfigAfterMigrate.mcpServers);
+    expect(serverKeys).toEqual(["sloth"]);
+    expect(cursorConfigAfterMigrate.mcpServers.docker).toBeUndefined();
+    expect(cursorConfigAfterMigrate.mcpServers.postgres).toBeUndefined();
+    expect(cursorConfigAfterMigrate.mcpServers["aws-s3"]).toBeUndefined();
+
+    // Now test restoreHarnessFromBackup
+    const restoreResult = restoreHarnessFromBackup("cursor", mockCursorConfigPath);
+    expect(restoreResult.restored).toBe(true);
+
+    // Verify client config is restored byte-for-byte with all 3 original servers
+    const restoredConfig = JSON.parse(readFileSync(mockCursorConfigPath, "utf-8"));
+    expect(Object.keys(restoredConfig.mcpServers).sort()).toEqual(["aws-s3", "docker", "postgres"]);
+    expect(restoredConfig.mcpServers.sloth).toBeUndefined();
+    expect(restoredConfig.mcpServers["aws-s3"].disabled).toBe(true);
   });
 });

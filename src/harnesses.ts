@@ -1,7 +1,7 @@
-import { copyFileSync, existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { writeJsonAtomic, type ServerConfig } from "./config.js";
+import { basename, dirname, join } from "node:path";
+import { loadConfig, saveConfig, writeJsonAtomic, type ServerConfig } from "./config.js";
 
 export type HarnessId =
   | "claude-desktop"
@@ -182,29 +182,66 @@ export function readHarnessServers(harnessId: HarnessId, customConfigPath?: stri
   return imported;
 }
 
+/**
+ * Finds the most recent rolling .bak file for a config path.
+ */
+export function findLatestBackup(configPath: string): string | null {
+  const dir = dirname(configPath);
+  if (!existsSync(dir)) return null;
+
+  const baseName = basename(configPath);
+  const prefix = `${baseName}.bak.`;
+
+  try {
+    const files = readdirSync(dir);
+    const matching = files
+      .filter((f) => f.startsWith(prefix))
+      .sort((a, b) => {
+        const timeA = parseInt(a.slice(prefix.length), 10) || 0;
+        const timeB = parseInt(b.slice(prefix.length), 10) || 0;
+        return timeB - timeA; // newest first
+      });
+
+    return matching.length > 0 ? join(dir, matching[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface InstallResult {
   backupPath: string;
   configPath: string;
+  importedCount?: number;
+}
+
+export interface InstallOptions {
+  migrate?: boolean; // When true: imports all existing servers into Sloth and replaces them in client config with only 'sloth'
+  customConfigPath?: string;
+  customEntry?: { command: string; args: string[] };
 }
 
 /**
  * Safely injects SlothMCP into a client harness with an automated timestamped backup.
+ * Supports `--migrate` mode to import existing servers and clean up the client config.
  */
-export function installSlothToHarness(
-  harnessId: HarnessId,
-  customConfigPath?: string,
-  customEntry?: { command: string; args: string[] }
-): InstallResult {
+export function installSlothToHarness(harnessId: HarnessId, options: InstallOptions = {}): InstallResult {
   const def = SUPPORTED_HARNESSES[harnessId];
   if (!def) {
     throw new Error(`Unsupported harness '${harnessId}'.`);
   }
 
-  const configPath = customConfigPath || def.getPath();
+  const configPath = options.customConfigPath || def.getPath();
   let existingData: Record<string, unknown> = {};
+  let importedCount = 0;
+
+  // Default entry pointing to built Sloth entrypoint
+  const slothEntry = options.customEntry || {
+    command: "node",
+    args: [join(dirname(dirname(new URL(import.meta.url).pathname)), "build", "src", "index.js")],
+  };
 
   if (existsSync(configPath)) {
-    // Create timestamped backup
+    // 1. Create timestamped backup
     const backupPath = `${configPath}.bak.${Date.now()}`;
     copyFileSync(configPath, backupPath);
 
@@ -215,31 +252,71 @@ export function installSlothToHarness(
       existingData = {};
     }
 
-    const servers = (existingData[def.configKey] || {}) as Record<string, unknown>;
+    // 2. Handle Migration if requested
+    if (options.migrate) {
+      const importedRecords = readHarnessServers(harnessId, configPath);
+      if (importedRecords.length > 0) {
+        const slothConfig = loadConfig();
+        for (const rec of importedRecords) {
+          slothConfig.servers[rec.name] = rec.config;
+        }
+        saveConfig(slothConfig);
+        importedCount = importedRecords.length;
+      }
 
-    // Inject sloth entry
-    servers["sloth"] = customEntry || {
-      command: "node",
-      args: [join(dirname(dirname(new URL(import.meta.url).pathname)), "build", "src", "index.js")],
-    };
+      // Replace server section with ONLY sloth
+      existingData[def.configKey] = {
+        sloth: slothEntry,
+      };
+    } else {
+      // Append mode: keep existing servers and add sloth
+      const servers = (existingData[def.configKey] || {}) as Record<string, unknown>;
+      servers["sloth"] = slothEntry;
+      existingData[def.configKey] = servers;
+    }
 
-    existingData[def.configKey] = servers;
     writeJsonAtomic(configPath, existingData);
-
-    return { backupPath, configPath };
+    return { backupPath, configPath, importedCount };
   } else {
     // Create fresh config
-    const dir = dirname(configPath);
     existingData[def.configKey] = {
-      sloth: customEntry || {
-        command: "node",
-        args: [join(dirname(dirname(new URL(import.meta.url).pathname)), "build", "src", "index.js")],
-      },
+      sloth: slothEntry,
     };
 
     writeJsonAtomic(configPath, existingData);
-    return { backupPath: "", configPath };
+    return { backupPath: "", configPath, importedCount: 0 };
   }
+}
+
+export interface RestoreResult {
+  restored: boolean;
+  backupUsed?: string;
+}
+
+/**
+ * Restores a client harness config from its most recent .bak backup.
+ */
+export function restoreHarnessFromBackup(harnessId: HarnessId, customConfigPath?: string): RestoreResult {
+  const def = SUPPORTED_HARNESSES[harnessId];
+  if (!def) {
+    throw new Error(`Unsupported harness '${harnessId}'.`);
+  }
+
+  const configPath = customConfigPath || def.getPath();
+  const latestBackup = findLatestBackup(configPath);
+
+  if (!latestBackup || !existsSync(latestBackup)) {
+    return { restored: false };
+  }
+
+  copyFileSync(latestBackup, configPath);
+  try {
+    unlinkSync(latestBackup);
+  } catch {
+    // ignore
+  }
+
+  return { restored: true, backupUsed: latestBackup };
 }
 
 /**

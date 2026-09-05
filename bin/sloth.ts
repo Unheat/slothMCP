@@ -17,6 +17,7 @@ import {
   detectHarnesses,
   installSlothToHarness,
   readHarnessServers,
+  restoreHarnessFromBackup,
   SUPPORTED_HARNESSES,
   uninstallSlothFromHarness,
   type HarnessId,
@@ -333,17 +334,21 @@ program
 program
   .command("install <harness>")
   .description("Safely configure an AI harness to point to SlothMCP (creates timestamped .bak backup)")
-  .action((harnessId: string) => {
+  .option("-m, --migrate", "Import existing servers to Sloth and replace client config with ONLY sloth to eliminate token bloat", false)
+  .action((harnessId: string, options: { migrate?: boolean }) => {
     if (!SUPPORTED_HARNESSES[harnessId as HarnessId]) {
       console.error(`[Sloth] Unsupported harness '${harnessId}'. Supported: ${Object.keys(SUPPORTED_HARNESSES).join(", ")}`);
       process.exit(1);
     }
 
-    const res = installSlothToHarness(harnessId as HarnessId);
+    const res = installSlothToHarness(harnessId as HarnessId, { migrate: options.migrate });
     console.log(`[Sloth] Successfully installed SlothMCP gateway into ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}!`);
     console.log(`[Sloth] Target Config: ${res.configPath}`);
     if (res.backupPath) {
       console.log(`[Sloth] Backup created: ${res.backupPath}`);
+    }
+    if (options.migrate && res.importedCount) {
+      console.log(`[Sloth] Migrated ${res.importedCount} server(s) to Sloth config. Client config now points exclusively to Sloth.`);
     }
   });
 
@@ -353,10 +358,21 @@ program
 program
   .command("uninstall <harness>")
   .description("Remove SlothMCP gateway entry from an AI harness configuration")
-  .action((harnessId: string) => {
+  .option("-r, --restore", "Restore client configuration from the most recent .bak backup", false)
+  .action((harnessId: string, options: { restore?: boolean }) => {
     if (!SUPPORTED_HARNESSES[harnessId as HarnessId]) {
       console.error(`[Sloth] Unsupported harness '${harnessId}'.`);
       process.exit(1);
+    }
+
+    if (options.restore) {
+      const restResult = restoreHarnessFromBackup(harnessId as HarnessId);
+      if (restResult.restored) {
+        console.log(`[Sloth] Successfully restored original configuration for ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName} from backup (${restResult.backupUsed}).`);
+        return;
+      } else {
+        console.warn(`[Sloth] No backup file found for ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}. Falling back to normal removal.`);
+      }
     }
 
     const removed = uninstallSlothFromHarness(harnessId as HarnessId);
