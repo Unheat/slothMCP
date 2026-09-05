@@ -70,47 +70,26 @@ All metrics measured on an Apple Silicon M-series machine using the automated be
 
 ---
 
-## Supported AI Client Harnesses
-
-SlothMCP works seamlessly with standard `stdio` MCP clients across **macOS, Linux, and Windows**:
-
-| Harness | ID | Default Config Location | Support Level |
-| :--- | :--- | :--- | :---: |
-| **Cursor IDE** | `cursor` | `~/.cursor/mcp.json` | Full (1-Click Migrate & Rollback) |
-| **Claude Desktop** | `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)<br>`~/.config/Claude/claude_desktop_config.json` (Linux)<br>`%APPDATA%\Claude\claude_desktop_config.json` (Windows) | Full (1-Click Migrate & Rollback) |
-| **VS Code (Copilot Chat)** | `vscode` | `~/Library/Application Support/Code/User/mcp.json` (macOS)<br>`~/.config/Code/User/mcp.json` (Linux)<br>`%APPDATA%\Code\User\mcp.json` (Windows) | Full (1-Click Migrate & Rollback) |
-| **Claude Code CLI** | `claude-code` | `~/.claude.json` | Full (1-Click Migrate & Rollback) |
-| **Windsurf IDE (Codeium)** | `windsurf` | `~/.codeium/windsurf/mcp_config.json` | Full (1-Click Migrate & Rollback) |
-| **Google Antigravity** | `antigravity` | `~/.gemini/antigravity/mcp_config.json` | Full (1-Click Migrate & Rollback) |
-| **OpenCode** | `opencode` | `~/.config/opencode/opencode.json` | Full (1-Click Migrate & Rollback) |
-
-> [!NOTE]
-> Run `npx sloth harnesses` to automatically scan your machine and detect which of these clients are installed and whether Sloth is active.
-
----
-
 ## Quickstart
 
-Run SlothMCP instantly with zero global installation:
+Run SlothMCP instantly with zero global installation. Migrate your existing MCP servers into Sloth with an automated backup:
 
-### 1. One-Click IDE Migration
-
-Migrate all existing MCP servers from Cursor into Sloth with an automated backup:
-
-```bash
-npx sloth install cursor --migrate
-```
-
-Or for Claude Desktop:
-
-```bash
-npx sloth install claude-desktop --migrate
-```
+| Harness | ID | Default Config Location | 1-Click Install Command |
+| :--- | :--- | :--- | :--- |
+| **Cursor IDE** | `cursor` | `~/.cursor/mcp.json` | `npx sloth install cursor --migrate` |
+| **Claude Desktop** | `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)<br>`~/.config/Claude/claude_desktop_config.json` (Linux)<br>`%APPDATA%\Claude\claude_desktop_config.json` (Windows) | `npx sloth install claude-desktop --migrate` |
+| **VS Code (Copilot Chat)** | `vscode` | `~/Library/Application Support/Code/User/mcp.json` (macOS)<br>`~/.config/Code/User/mcp.json` (Linux)<br>`%APPDATA%\Code\User\mcp.json` (Windows) | `npx sloth install vscode --migrate` |
+| **Claude Code CLI** | `claude-code` | `~/.claude.json` | `npx sloth install claude-code --migrate` |
+| **Windsurf IDE (Codeium)** | `windsurf` | `~/.codeium/windsurf/mcp_config.json` | `npx sloth install windsurf --migrate` |
+| **Google Antigravity** | `antigravity` | `~/.gemini/antigravity/mcp_config.json` | `npx sloth install antigravity --migrate` |
+| **OpenCode** | `opencode` | `~/.config/opencode/opencode.json` | `npx sloth install opencode --migrate` |
 
 > [!TIP]
-> The `--migrate` flag automatically imports all existing servers into Sloth (preserving enabled and disabled states), creates a rolling timestamped `.bak` backup, and configures the IDE to talk exclusively to Sloth.
+> The `--migrate` flag automatically imports all your existing servers into Sloth (preserving enabled and disabled states), creates a rolling timestamped `.bak` backup, and configures the IDE to talk exclusively to Sloth.
+>
+> Run `npx sloth harnesses` to scan which clients are installed on your machine.
 
-### 2. Verify Your Setup
+### Verify Your Setup
 
 ```bash
 npx sloth doctor
