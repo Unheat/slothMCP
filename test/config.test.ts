@@ -45,6 +45,7 @@ describe("SlothConfig & Manifest Storage", () => {
   it("saves and loads configuration atomically", () => {
     const newConfig: SlothConfig = {
       idleTimeoutMs: 120_000,
+      defaultOnDemand: true,
       servers: {
         docker: {
           command: "docker-mcp",

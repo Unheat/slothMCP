@@ -101,4 +101,32 @@ describe("Sloth CLI Configuration Flow", () => {
     expect(loadConfig().servers["to-remove"]).toBeUndefined();
     expect(loadManifest("to-remove")).toBeNull();
   });
+
+  it("stores and modifies onDemand and defaultOnDemand configuration settings", () => {
+    const config = loadConfig();
+    expect(config.defaultOnDemand).toBe(true);
+
+    config.defaultOnDemand = false;
+    config.servers["persistent-srv"] = {
+      command: "my-cmd",
+      args: [],
+      disabled: false,
+      tags: [],
+      onDemand: false,
+    };
+    config.servers["lazy-srv"] = {
+      command: "my-lazy-cmd",
+      args: [],
+      disabled: false,
+      tags: [],
+      onDemand: true,
+    };
+
+    saveConfig(config);
+
+    const reloaded = loadConfig();
+    expect(reloaded.defaultOnDemand).toBe(false);
+    expect(reloaded.servers["persistent-srv"].onDemand).toBe(false);
+    expect(reloaded.servers["lazy-srv"].onDemand).toBe(true);
+  });
 });

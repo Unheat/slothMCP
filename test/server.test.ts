@@ -9,6 +9,7 @@ describe("SlothMCP Server Gateway Integration", () => {
 
   const mockConfig: SlothConfig = {
     idleTimeoutMs: 1000,
+    defaultOnDemand: true,
     servers: {
       mock: {
         command: "npx",
