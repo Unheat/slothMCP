@@ -40,7 +40,9 @@ program
   .description("Register a new downstream MCP server and introspect its tool schemas into cache")
   .option("-e, --env <key=value...>", "Environment variables for the server process", [])
   .option("-t, --tags <tags...>", "Search tags for the server", [])
-  .action(async (name: string, command: string, args: string[], options: { env?: string[]; tags?: string[] }) => {
+  .option("--always-on", "Keep process always running (disable on-demand idle reaping)", false)
+  .option("--on-demand", "Spawn lazily on demand and reap when idle (default)", true)
+  .action(async (name: string, command: string, args: string[], options: { env?: string[]; tags?: string[]; alwaysOn?: boolean }) => {
     try {
       const config = loadConfig();
 
@@ -59,12 +61,14 @@ program
         env: Object.keys(envObj).length > 0 ? envObj : undefined,
         tags: options.tags || [],
         disabled: false,
+        onDemand: options.alwaysOn ? false : true,
       };
 
       config.servers[name] = serverConfig;
       saveConfig(config);
 
-      console.log(`[Sloth] Added server '${name}'. Introspecting tools...`);
+      const modeStr = serverConfig.onDemand ? "on-demand" : "always-on";
+      console.log(`[Sloth] Added server '${name}' (Mode: ${modeStr}). Introspecting tools...`);
 
       // Introspect tools
       const pool = new ProcessPool();
@@ -133,24 +137,26 @@ program
     }
 
     console.log("\nRegistered Downstream Servers:");
-    console.log("─".repeat(70));
+    console.log("─".repeat(82));
     console.log(
-      `${"Name".padEnd(16)} ${"Status".padEnd(12)} ${"Tools".padEnd(8)} ${"Command"}`
+      `${"Name".padEnd(16)} ${"Status".padEnd(12)} ${"Mode".padEnd(12)} ${"Tools".padEnd(8)} ${"Command"}`
     );
-    console.log("─".repeat(70));
+    console.log("─".repeat(82));
 
     for (const name of serverNames) {
       const srv = config.servers[name];
       const manifest = manifests.get(name) || loadManifest(name);
       const toolCount = manifest ? manifest.tools.length : 0;
       const status = srv.disabled ? "disabled" : "enabled";
+      const isOnDemand = srv.onDemand !== undefined ? srv.onDemand : (config.defaultOnDemand ?? true);
+      const mode = isOnDemand ? "on-demand" : "always-on";
       const fullCmd = [srv.command, ...(srv.args || [])].join(" ");
 
       console.log(
-        `${name.padEnd(16)} ${status.padEnd(12)} ${String(toolCount).padEnd(8)} ${fullCmd}`
+        `${name.padEnd(16)} ${status.padEnd(12)} ${mode.padEnd(12)} ${String(toolCount).padEnd(8)} ${fullCmd}`
       );
     }
-    console.log("─".repeat(70) + "\n");
+    console.log("─".repeat(82) + "\n");
   });
 
 /**
@@ -227,8 +233,77 @@ program
   });
 
 /**
- * Command: sloth harnesses
+ * Command: sloth config set <target> [field] [value]
+ * Examples:
+ *   sloth config set defaultOnDemand false
+ *   sloth config set idleTimeoutMs 600000
+ *   sloth config set docker onDemand false
  */
+const configCmd = program.command("config").description("View or modify SlothMCP configuration");
+
+configCmd
+  .command("get [key]")
+  .description("View current Sloth configuration values")
+  .action((key?: string) => {
+    const config = loadConfig();
+    if (!key) {
+      console.log(JSON.stringify(config, null, 2));
+      return;
+    }
+
+    if (key in config) {
+      console.log(`${key}:`, (config as Record<string, unknown>)[key]);
+    } else if (config.servers[key]) {
+      console.log(JSON.stringify(config.servers[key], null, 2));
+    } else {
+      console.error(`[Sloth] Configuration key '${key}' not found.`);
+      process.exit(1);
+    }
+  });
+
+configCmd
+  .command("set <target> [field] [val]")
+  .description("Set a global setting (e.g. defaultOnDemand false) or server setting (e.g. docker onDemand false)")
+  .action((target: string, field?: string, val?: string) => {
+    const config = loadConfig();
+
+    // Case 1: Global setting (target is 'defaultOnDemand' or 'idleTimeoutMs')
+    if (target === "defaultOnDemand" || target === "idleTimeoutMs") {
+      const valueToSet = field ?? val;
+      if (target === "defaultOnDemand") {
+        config.defaultOnDemand = valueToSet === "true" || valueToSet === "1";
+        console.log(`[Sloth] Set defaultOnDemand = ${config.defaultOnDemand}`);
+      } else if (target === "idleTimeoutMs") {
+        const num = parseInt(valueToSet || "", 10);
+        if (Number.isNaN(num) || num <= 0) {
+          console.error(`[Sloth] Invalid number for idleTimeoutMs.`);
+          process.exit(1);
+        }
+        config.idleTimeoutMs = num;
+        console.log(`[Sloth] Set idleTimeoutMs = ${config.idleTimeoutMs}ms`);
+      }
+      saveConfig(config);
+      return;
+    }
+
+    // Case 2: Server setting (target is server name, field is 'onDemand')
+    const srv = config.servers[target];
+    if (!srv) {
+      console.error(`[Sloth] Server '${target}' not found in configuration.`);
+      process.exit(1);
+    }
+
+    if (field === "onDemand") {
+      const boolVal = val === "true" || val === "1";
+      srv.onDemand = boolVal;
+      saveConfig(config);
+      console.log(`[Sloth] Set '${target}' onDemand = ${boolVal} (Mode: ${boolVal ? "on-demand" : "always-on"})`);
+      return;
+    }
+
+    console.error(`[Sloth] Unknown setting. Use 'sloth config set <server> onDemand <true|false>' or 'sloth config set defaultOnDemand <true|false>'`);
+    process.exit(1);
+  });
 program
   .command("harnesses")
   .description("Scan and list all detected AI client harnesses (Claude Desktop, Cursor, VS Code, etc.)")
