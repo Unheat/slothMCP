@@ -91,4 +91,82 @@ describe("ProcessPool & StderrRingBuffer", () => {
     expect(pool.isRunning("mock")).toBe(false);
     expect(pool.activeCount).toBe(0);
   });
+
+  it("resolves isOnDemand with per-server override and global default", () => {
+    pool.updateServerConfigs({
+      serverA: { command: "cmdA", args: [], disabled: false, tags: [], onDemand: true },
+      serverB: { command: "cmdB", args: [], disabled: false, tags: [], onDemand: false },
+      serverC: { command: "cmdC", args: [], disabled: false, tags: [] }, // undefined -> default true
+    });
+
+    expect(pool.isOnDemand("serverA")).toBe(true);
+    expect(pool.isOnDemand("serverB")).toBe(false);
+    expect(pool.isOnDemand("serverC")).toBe(true);
+
+    // Flip global default
+    pool.updateServerConfigs(
+      {
+        serverA: { command: "cmdA", args: [], disabled: false, tags: [], onDemand: true },
+        serverB: { command: "cmdB", args: [], disabled: false, tags: [], onDemand: false },
+        serverC: { command: "cmdC", args: [], disabled: false, tags: [] },
+      },
+      undefined,
+      false // defaultOnDemand: false
+    );
+
+    expect(pool.isOnDemand("serverA")).toBe(true);
+    expect(pool.isOnDemand("serverB")).toBe(false);
+    expect(pool.isOnDemand("serverC")).toBe(false); // now false
+  });
+
+  it("keeps always-on server (onDemand: false) running after execution without reaping", async () => {
+    pool.updateServerConfigs({
+      persistentMock: {
+        command: "npx",
+        args: ["tsx", mockServerScript],
+        disabled: false,
+        tags: [],
+        onDemand: false, // always-on!
+      },
+    });
+
+    expect(pool.isRunning("persistentMock")).toBe(false);
+
+    // Execute tool
+    await pool.executeTool("persistentMock", "echo", { msg: "test-persistent" });
+
+    expect(pool.isRunning("persistentMock")).toBe(true);
+
+    // Wait past the 500ms idle timeout threshold
+    await new Promise((r) => setTimeout(r, 600));
+
+    // Must STILL be running because onDemand is false!
+    expect(pool.isRunning("persistentMock")).toBe(true);
+  });
+
+  it("pre-warms persistent servers on bootPersistentServers", async () => {
+    pool.updateServerConfigs({
+      alwaysOnServer: {
+        command: "npx",
+        args: ["tsx", mockServerScript],
+        disabled: false,
+        tags: [],
+        onDemand: false,
+      },
+      onDemandServer: {
+        command: "npx",
+        args: ["tsx", mockServerScript],
+        disabled: false,
+        tags: [],
+        onDemand: true,
+      },
+    });
+
+    expect(pool.activeCount).toBe(0);
+
+    const booted = await pool.bootPersistentServers();
+    expect(booted).toEqual(["alwaysOnServer"]);
+    expect(pool.isRunning("alwaysOnServer")).toBe(true);
+    expect(pool.isRunning("onDemandServer")).toBe(false); // stays dormant
+  });
 });

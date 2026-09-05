@@ -107,6 +107,7 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
   const toolIndex = new ToolIndex();
   const pool = new ProcessPool({
     idleTimeoutMs: config.idleTimeoutMs,
+    defaultOnDemand: config.defaultOnDemand,
     onToolsChanged: () => {
       reload();
     },
@@ -131,7 +132,7 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
     });
 
     toolIndex.buildIndex(enabledManifests, tagsMap);
-    pool.updateServerConfigs(config.servers, config.idleTimeoutMs);
+    pool.updateServerConfigs(config.servers, config.idleTimeoutMs, config.defaultOnDemand);
   };
 
   // Initial load
@@ -307,6 +308,12 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
   );
 
   const start = async () => {
+    // Pre-warm any persistent servers (onDemand: false)
+    const booted = await pool.bootPersistentServers();
+    if (booted.length > 0) {
+      console.error(`[SlothMCP] Booted ${booted.length} persistent server(s): ${booted.join(", ")}`);
+    }
+
     const transport = new StdioServerTransport();
     await mcpServer.connect(transport);
     console.error("[SlothMCP] Gateway started on stdio.");

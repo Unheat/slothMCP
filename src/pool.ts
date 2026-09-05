@@ -43,6 +43,7 @@ export interface PoolEntry {
 
 export interface ProcessPoolOptions {
   idleTimeoutMs?: number; // default 300,000 (5 min)
+  defaultOnDemand?: boolean; // default: true
   onServerReaped?: (serverName: string) => void;
   onServerError?: (serverName: string, error: Error) => void;
   onToolsChanged?: (serverName: string, tools: ToolDefinition[]) => void;
@@ -57,6 +58,7 @@ export class ProcessPool {
   private startingLocks = new Map<string, Promise<PoolEntry>>();
   private serverConfigs: Record<string, ServerConfig> = {};
   private idleTimeoutMs: number;
+  private defaultOnDemand: boolean;
   private onServerReaped?: (serverName: string) => void;
   private onServerError?: (serverName: string, error: Error) => void;
   private onToolsChanged?: (serverName: string, tools: ToolDefinition[]) => void;
@@ -64,6 +66,7 @@ export class ProcessPool {
 
   constructor(options: ProcessPoolOptions = {}) {
     this.idleTimeoutMs = options.idleTimeoutMs ?? 300_000;
+    this.defaultOnDemand = options.defaultOnDemand ?? true;
     this.onServerReaped = options.onServerReaped;
     this.onServerError = options.onServerError;
     this.onToolsChanged = options.onToolsChanged;
@@ -73,13 +76,52 @@ export class ProcessPool {
   }
 
   /**
+   * Resolves whether a specific server is configured for on-demand lazy lifecycle.
+   * If onDemand is undefined on the server, falls back to defaultOnDemand.
+   */
+  public isOnDemand(serverName: string): boolean {
+    const cfg = this.serverConfigs[serverName];
+    if (!cfg) return this.defaultOnDemand;
+    return cfg.onDemand !== undefined ? cfg.onDemand : this.defaultOnDemand;
+  }
+
+  /**
    * Updates registered server configurations without restarting active processes.
    */
-  public updateServerConfigs(configs: Record<string, ServerConfig>, idleTimeoutMs?: number): void {
+  public updateServerConfigs(
+    configs: Record<string, ServerConfig>,
+    idleTimeoutMs?: number,
+    defaultOnDemand?: boolean
+  ): void {
     this.serverConfigs = { ...configs };
     if (idleTimeoutMs !== undefined) {
       this.idleTimeoutMs = idleTimeoutMs;
     }
+    if (defaultOnDemand !== undefined) {
+      this.defaultOnDemand = defaultOnDemand;
+    }
+  }
+
+  /**
+   * Pre-warms / boots all enabled persistent servers (onDemand: false) on gateway startup.
+   */
+  public async bootPersistentServers(): Promise<string[]> {
+    const booted: string[] = [];
+    const promises: Promise<unknown>[] = [];
+
+    for (const [name, cfg] of Object.entries(this.serverConfigs)) {
+      if (!cfg.disabled && !this.isOnDemand(name)) {
+        booted.push(name);
+        promises.push(
+          this.acquire(name).catch((err) => {
+            console.error(`[SlothProcessPool] Failed to pre-boot persistent server '${name}':`, err);
+          })
+        );
+      }
+    }
+
+    await Promise.allSettled(promises);
+    return booted;
   }
 
   /**
@@ -146,6 +188,11 @@ export class ProcessPool {
 
     entry.inFlightCount = Math.max(0, entry.inFlightCount - 1);
     entry.lastActivity = Date.now();
+
+    // If server is configured as always-on (onDemand: false), do not schedule idle reap
+    if (!this.isOnDemand(serverName)) {
+      return;
+    }
 
     if (entry.inFlightCount === 0 && !this.isShuttingDown) {
       if (entry.idleTimer) {

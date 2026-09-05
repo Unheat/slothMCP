@@ -24,6 +24,7 @@ export const ServerConfigSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   disabled: z.boolean().optional().default(false),
   tags: z.array(z.string()).optional().default([]),
+  onDemand: z.boolean().optional(), // undefined falls back to global defaultOnDemand
 });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
@@ -34,6 +35,7 @@ export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export const SlothConfigSchema = z.object({
   $schema: z.string().optional(),
   idleTimeoutMs: z.number().int().positive().optional().default(300_000), // default 5 minutes
+  defaultOnDemand: z.boolean().optional().default(true), // default on-demand lazy lifecycle
   servers: z.record(z.string(), ServerConfigSchema).default({}),
 });
 
@@ -119,6 +121,7 @@ export function loadConfig(): SlothConfig {
   if (!existsSync(configPath)) {
     return {
       idleTimeoutMs: 300_000,
+      defaultOnDemand: true,
       servers: {},
     };
   }
@@ -131,6 +134,7 @@ export function loadConfig(): SlothConfig {
     console.error(`[SlothConfig] Error parsing config at ${configPath}:`, error);
     return {
       idleTimeoutMs: 300_000,
+      defaultOnDemand: true,
       servers: {},
     };
   }

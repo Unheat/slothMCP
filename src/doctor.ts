@@ -81,6 +81,8 @@ export function runDoctor(): HealthCheckResult[] {
       const manifest = manifests.get(name);
       const toolCount = manifest ? manifest.tools.length : 0;
       const statusLabel = srv.disabled ? "disabled" : "enabled";
+      const isOnDemand = srv.onDemand !== undefined ? srv.onDemand : (config.defaultOnDemand ?? true);
+      const modeLabel = isOnDemand ? "on-demand" : "always-on";
 
       // Check if command is executable via `which`
       let commandExists = true;
@@ -95,14 +97,14 @@ export function runDoctor(): HealthCheckResult[] {
           category: "Servers",
           name: `Server '${name}'`,
           status: "warn",
-          message: `Command '${srv.command}' not found in PATH (${statusLabel}, ${toolCount} cached tools)`,
+          message: `Command '${srv.command}' not found in PATH (${statusLabel}, ${modeLabel}, ${toolCount} cached tools)`,
         });
       } else {
         results.push({
           category: "Servers",
           name: `Server '${name}'`,
           status: "ok",
-          message: `${srv.command} (${statusLabel}, ${toolCount} cached tools)`,
+          message: `${srv.command} (${statusLabel}, ${modeLabel}, ${toolCount} cached tools)`,
         });
       }
     }
