@@ -4,6 +4,7 @@ import { z } from "zod";
 import { loadAllManifests, loadConfig, type SlothConfig } from "./config.js";
 import { buildTaxonomy, formatCompactSignature, ToolIndex } from "./indexer.js";
 import { ProcessPool } from "./pool.js";
+import { shapeToolOutput } from "./shaper.js";
 
 /**
  * Normalizes a parameter key string for fuzzy comparison (e.g. container_name -> containername)
@@ -256,10 +257,15 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
         const callResult = result as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | undefined;
 
         if (callResult && Array.isArray(callResult.content) && callResult.content.length > 0) {
-          const textItems = callResult.content.map((item) => ({
-            type: "text" as const,
-            text: item.text ?? JSON.stringify(item),
-          }));
+          const textItems = callResult.content.map((item) => {
+            if (item.type === "text") {
+              return {
+                type: "text" as const,
+                text: shapeToolOutput(item.text ?? ""),
+              };
+            }
+            return item as { type: "text"; text: string };
+          });
 
           return {
             isError: callResult.isError,
@@ -267,12 +273,13 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
           };
         }
 
+        const rawText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
         return {
           isError: false,
           content: [
             {
               type: "text" as const,
-              text: typeof result === "string" ? result : JSON.stringify(result, null, 2),
+              text: shapeToolOutput(rawText),
             },
           ],
         };
