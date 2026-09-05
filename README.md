@@ -70,6 +70,25 @@ All metrics measured on an Apple Silicon M-series machine using the automated be
 
 ---
 
+## Supported AI Client Harnesses
+
+SlothMCP works seamlessly with standard `stdio` MCP clients across **macOS, Linux, and Windows**:
+
+| Harness | ID | Default Config Location | Support Level |
+| :--- | :--- | :--- | :---: |
+| **Cursor IDE** | `cursor` | `~/.cursor/mcp.json` | Full (1-Click Migrate & Rollback) |
+| **Claude Desktop** | `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)<br>`~/.config/Claude/claude_desktop_config.json` (Linux)<br>`%APPDATA%\Claude\claude_desktop_config.json` (Windows) | Full (1-Click Migrate & Rollback) |
+| **VS Code (Copilot Chat)** | `vscode` | `~/Library/Application Support/Code/User/mcp.json` (macOS)<br>`~/.config/Code/User/mcp.json` (Linux)<br>`%APPDATA%\Code\User\mcp.json` (Windows) | Full (1-Click Migrate & Rollback) |
+| **Claude Code CLI** | `claude-code` | `~/.claude.json` | Full (1-Click Migrate & Rollback) |
+| **Windsurf IDE (Codeium)** | `windsurf` | `~/.codeium/windsurf/mcp_config.json` | Full (1-Click Migrate & Rollback) |
+| **Google Antigravity** | `antigravity` | `~/.gemini/antigravity/mcp_config.json` | Full (1-Click Migrate & Rollback) |
+| **OpenCode** | `opencode` | `~/.config/opencode/opencode.json` | Full (1-Click Migrate & Rollback) |
+
+> [!NOTE]
+> Run `npx sloth harnesses` to automatically scan your machine and detect which of these clients are installed and whether Sloth is active.
+
+---
+
 ## Quickstart
 
 Run SlothMCP instantly with zero global installation:
