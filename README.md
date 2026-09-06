@@ -164,8 +164,26 @@ The model receives 100% global capability visibility upfront for just ~40 tokens
 | **`sloth harnesses`**| `sloth harnesses` | Scans host machine and lists detected AI clients (Claude Desktop, Cursor, VS Code, etc.). |
 | **`sloth import`** | `sloth import [harness]` | Imports all servers from an existing IDE config into Sloth (preserving enabled/disabled). |
 | **`sloth install`**| `sloth install <harness> [--migrate]` | Configures IDE to use SlothMCP with automated rolling `.bak` backup. |
+| **`sloth eject`**| `sloth eject <harness>` | Restores all servers back into the harness config (backup byte-for-byte, or dynamic export) and removes the `sloth` entry. Alias: `sloth restore`. |
 | **`sloth uninstall`**| `sloth uninstall <harness> [--restore]` | Removes Sloth from IDE config, or restores original configuration from backup. |
 | **`sloth doctor`** | `sloth doctor` | Comprehensive health check on Node runtime, paths, configs, and harnesses. |
+
+---
+
+## Agent Skill
+
+SlothMCP ships an agent skill (`skills/sloth-manager/`) that teaches AI coding agents how to
+operate the CLI autonomously — detecting harnesses, installing/migrating, adding servers, and
+ejecting safely with rollback — without any human walkthrough.
+
+To activate it for your agent, symlink it into your agent's user skills directory:
+
+```bash
+# ZCode
+ln -s "$(pwd)/skills/sloth-manager" ~/.zcode/skills/sloth-manager
+# Claude Code
+ln -s "$(pwd)/skills/sloth-manager" ~/.claude/skills/sloth-manager
+```
 
 ---
 
