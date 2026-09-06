@@ -83,6 +83,7 @@ Run SlothMCP instantly with zero global installation. Migrate your existing MCP 
 | **Windsurf IDE (Codeium)** | `windsurf` | `~/.codeium/windsurf/mcp_config.json` | `npx sloth install windsurf --migrate` |
 | **Google Antigravity** | `antigravity` | `~/.gemini/antigravity/mcp_config.json` | `npx sloth install antigravity --migrate` |
 | **OpenCode** | `opencode` | `~/.config/opencode/opencode.json` | `npx sloth install opencode --migrate` |
+| **ZCode** | `zcode` | `~/.zcode/cli/config.json` | `npx sloth install zcode --migrate` |
 
 > [!TIP]
 > The `--migrate` flag automatically imports all your existing servers into Sloth (preserving enabled and disabled states), creates a rolling timestamped `.bak` backup, and configures the IDE to talk exclusively to Sloth.
