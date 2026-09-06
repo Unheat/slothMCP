@@ -3,6 +3,10 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { loadConfig, saveConfig, writeJsonAtomic, type ServerConfig } from "./config.js";
 
+// Donor code provenance: no code in this module is copied or adapted from any
+// repository under reference/ — all implementation is local (see
+// .zcode/plans/plan-zcode-harness.md).
+
 export type HarnessId =
   | "claude-desktop"
   | "cursor"
@@ -10,13 +14,24 @@ export type HarnessId =
   | "windsurf"
   | "vscode"
   | "antigravity"
-  | "opencode";
+  | "opencode"
+  | "zcode";
 
 export interface HarnessDefinition {
   id: HarnessId;
   displayName: string;
-  configKey: "mcpServers" | "servers" | "mcp";
+  /**
+   * Dot-path to the server section inside the harness config file
+   * (e.g. "mcpServers" for flat configs, "mcp.servers" for nested ones).
+   */
+  configKey: string;
   getPath: (platform?: NodeJS.Platform) => string;
+  /**
+   * Optional hook to reshape a server entry before writing it into this
+   * harness's config, for harnesses whose entry schema differs from the
+   * common {command, args, env, disabled} shape.
+   */
+  normalizeEntry?: (entry: Record<string, unknown>) => Record<string, unknown>;
 }
 
 export const SUPPORTED_HARNESSES: Record<HarnessId, HarnessDefinition> = {
@@ -80,7 +95,62 @@ export const SUPPORTED_HARNESSES: Record<HarnessId, HarnessDefinition> = {
     configKey: "mcp",
     getPath: () => join(homedir(), ".config", "opencode", "opencode.json"),
   },
+  zcode: {
+    id: "zcode",
+    displayName: "ZCode",
+    configKey: "mcp.servers",
+    getPath: () => join(homedir(), ".zcode", "cli", "config.json"),
+    // ZCode's config parser is strict: unknown keys (e.g. "disabled") cause the
+    // server to be silently dropped, so entries must use type/enabled instead.
+    normalizeEntry: (entry) => {
+      const { disabled, ...rest } = entry;
+      const out: Record<string, unknown> = { type: "stdio", ...rest };
+      if (disabled === true) {
+        out.enabled = false;
+      } else {
+        delete out.enabled;
+      }
+      return out;
+    },
+  },
 };
+
+/**
+ * Resolves a dot-path (e.g. "mcp.servers") inside a parsed JSON object.
+ *
+ * @param parsed - Parsed JSON config object
+ * @param configKey - Dot-path to the server section
+ * @returns The section object, or undefined if any segment is missing or not an object
+ */
+function getServerSection(parsed: Record<string, unknown>, configKey: string): Record<string, unknown> | undefined {
+  let node: unknown = parsed;
+  for (const segment of configKey.split(".")) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+    node = (node as Record<string, unknown>)[segment];
+  }
+  if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+  return node as Record<string, unknown>;
+}
+
+/**
+ * Resolves a dot-path inside a parsed JSON object, creating intermediate
+ * objects (and the final section) as needed. Mutates `parsed` in place.
+ *
+ * @param parsed - Parsed JSON config object
+ * @param configKey - Dot-path to the server section
+ * @returns The (possibly newly created) section object
+ */
+function ensureServerSection(parsed: Record<string, unknown>, configKey: string): Record<string, unknown> {
+  let node = parsed;
+  for (const segment of configKey.split(".")) {
+    const next = node[segment];
+    if (!next || typeof next !== "object" || Array.isArray(next)) {
+      node[segment] = {};
+    }
+    node = node[segment] as Record<string, unknown>;
+  }
+  return node;
+}
 
 export interface DetectedHarnessStatus {
   id: HarnessId;
@@ -109,7 +179,7 @@ export function detectHarnesses(): DetectedHarnessStatus[] {
       try {
         const raw = readFileSync(configPath, "utf-8");
         const parsed = JSON.parse(raw);
-        const servers = parsed[def.configKey] || {};
+        const servers: Record<string, unknown> = getServerSection(parsed, def.configKey) || {};
         serverCount = Object.keys(servers).length;
         hasSlothConfigured = Boolean(servers["sloth"]);
       } catch {
@@ -156,11 +226,11 @@ export function readHarnessServers(harnessId: HarnessId, customConfigPath?: stri
 
   const raw = readFileSync(configPath, "utf-8");
   const parsed = JSON.parse(raw);
-  const rawServers = parsed[def.configKey] || {};
+  const rawServers: Record<string, unknown> = getServerSection(parsed, def.configKey) || {};
 
   const imported: ImportedServerRecord[] = [];
 
-  for (const [name, srv] of Object.entries<Record<string, unknown>>(rawServers)) {
+  for (const [name, srv] of Object.entries(rawServers as Record<string, Record<string, unknown>>)) {
     // Skip self/sloth entry if already configured
     if (name === "sloth") continue;
 
@@ -252,6 +322,7 @@ export function installSlothToHarness(harnessId: HarnessId, options: InstallOpti
     command: "node",
     args: [join(dirname(dirname(new URL(import.meta.url).pathname)), "build", "src", "index.js")],
   };
+  const normalizedEntry = def.normalizeEntry ? def.normalizeEntry(slothEntry) : slothEntry;
 
   if (existsSync(configPath)) {
     // 1. Create timestamped backup
@@ -278,23 +349,21 @@ export function installSlothToHarness(harnessId: HarnessId, options: InstallOpti
       }
 
       // Replace server section with ONLY sloth
-      existingData[def.configKey] = {
-        sloth: slothEntry,
-      };
+      const section = ensureServerSection(existingData, def.configKey);
+      for (const key of Object.keys(section)) {
+        delete section[key];
+      }
+      section["sloth"] = normalizedEntry;
     } else {
       // Append mode: keep existing servers and add sloth
-      const servers = (existingData[def.configKey] || {}) as Record<string, unknown>;
-      servers["sloth"] = slothEntry;
-      existingData[def.configKey] = servers;
+      ensureServerSection(existingData, def.configKey)["sloth"] = normalizedEntry;
     }
 
     writeJsonAtomic(configPath, existingData);
     return { backupPath, configPath, importedCount };
   } else {
     // Create fresh config
-    existingData[def.configKey] = {
-      sloth: slothEntry,
-    };
+    ensureServerSection(existingData, def.configKey)["sloth"] = normalizedEntry;
 
     writeJsonAtomic(configPath, existingData);
     return { backupPath: "", configPath, importedCount: 0 };
@@ -339,7 +408,7 @@ export function ejectHarnessConfig(harnessId: HarnessId, customConfigPath?: stri
     try {
       const backupRaw = readFileSync(latestBackup, "utf-8");
       const backupParsed = JSON.parse(backupRaw);
-      const backupServers = (backupParsed[def.configKey] || {}) as Record<string, unknown>;
+      const backupServers = getServerSection(backupParsed, def.configKey) || {};
       ejectedCount = Object.keys(backupServers).filter((k) => k !== "sloth").length;
     } catch {
       // ignore parse error on backup count detection
@@ -368,7 +437,7 @@ export function ejectHarnessConfig(harnessId: HarnessId, customConfigPath?: stri
   try {
     const raw = readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw);
-    const existingServers = (parsed[def.configKey] || {}) as Record<string, unknown>;
+    const existingServers: Record<string, unknown> = getServerSection(parsed, def.configKey) || {};
 
     // Check if sloth was even installed
     const hadSloth = Boolean(existingServers["sloth"]);
@@ -379,16 +448,17 @@ export function ejectHarnessConfig(harnessId: HarnessId, customConfigPath?: stri
     let exportedCount = 0;
 
     for (const [srvName, srvDef] of Object.entries(slothConfig.servers)) {
-      existingServers[srvName] = {
+      const entry = {
         command: srvDef.command,
         args: srvDef.args || [],
         env: srvDef.env,
         disabled: srvDef.disabled,
       };
+      existingServers[srvName] = def.normalizeEntry ? def.normalizeEntry(entry) : entry;
       exportedCount++;
     }
 
-    parsed[def.configKey] = existingServers;
+    Object.assign(ensureServerSection(parsed, def.configKey), existingServers);
     writeJsonAtomic(configPath, parsed);
 
     return {
@@ -446,7 +516,7 @@ export function uninstallSlothFromHarness(harnessId: HarnessId, customConfigPath
   try {
     const raw = readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw);
-    const servers = parsed[def.configKey] as Record<string, unknown> | undefined;
+    const servers = getServerSection(parsed, def.configKey);
 
     if (servers && servers["sloth"]) {
       delete servers["sloth"];

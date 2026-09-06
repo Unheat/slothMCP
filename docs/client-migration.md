@@ -17,6 +17,9 @@ SlothMCP natively resolves configuration file locations across macOS, Linux, and
 | **Windsurf IDE** | `~/.codeium/windsurf/mcp_config.json` | `mcpServers` |
 | **Google Antigravity**| `~/.gemini/antigravity/mcp_config.json` | `mcpServers` |
 | **OpenCode** | `~/.config/opencode/opencode.json` | `mcp` |
+| **ZCode** | `~/.zcode/cli/config.json` | `mcp.servers` (nested) |
+
+> **ZCode note:** ZCode's parser is strict — entries with unknown keys are silently dropped. Sloth writes ZCode entries in its native shape (`type: "stdio"`, `enabled: false` for disabled servers) rather than the common `disabled` flag.
 
 ---
 
