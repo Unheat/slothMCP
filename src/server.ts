@@ -7,6 +7,19 @@ import { ProcessPool } from "./pool.js";
 import { shapeToolOutput } from "./shaper.js";
 
 /**
+ * Protocol-native guidance sent to every MCP client during initialization.
+ *
+ * Adapted from reference/mcpproxy-go/internal/server/mcp.go:74-83
+ * (defaultInstructions); wording and workflow are specific to SlothMCP.
+ */
+export const SLOTH_GATEWAY_INSTRUCTIONS = `SlothMCP is an aggregation gateway for downstream MCP servers. Their tool descriptions and schemas are exposed through Sloth.
+DISCOVERY: Call search_tools first to find relevant tools before assuming a capability is unavailable.
+SCHEMA: Call get_tool_schema when you need the full schema for a discovered tool.
+EXECUTION: Call execute_tool with the exact server and tool names returned by discovery.
+MANAGEMENT: Use the sloth CLI commands list, add, sync, and doctor to manage downstream servers.
+HARNESS CONFIG: Installing, ejecting, or uninstalling Sloth changes user configuration; ask the user before performing those operations.`;
+
+/**
  * Normalizes a parameter key string for fuzzy comparison (e.g. container_name -> containername)
  *
  * @param key - Raw parameter name string
@@ -150,10 +163,13 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
   // Initial load
   reload();
 
-  const mcpServer = new McpServer({
-    name: "sloth-gateway",
-    version: "1.0.0",
-  });
+  const mcpServer = new McpServer(
+    {
+      name: "sloth-gateway",
+      version: "1.0.0",
+    },
+    { instructions: SLOTH_GATEWAY_INSTRUCTIONS }
+  );
 
   const taxonomy = buildTaxonomy(
     Array.from((options.customManifests || loadAllManifests()).values()).filter((m) => {

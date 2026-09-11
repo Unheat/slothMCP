@@ -1,7 +1,13 @@
+import { Client } from "@modelcontextprotocol/client";
+import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ManifestData, SlothConfig } from "../src/config.js";
-import { createSlothServer, type SlothServerInstance } from "../src/server.js";
+import {
+  createSlothServer,
+  SLOTH_GATEWAY_INSTRUCTIONS,
+  type SlothServerInstance,
+} from "../src/server.js";
 
 describe("SlothMCP Server Gateway Integration", () => {
   const mockServerScript = join(__dirname, "mock-server.ts");
@@ -60,6 +66,16 @@ describe("SlothMCP Server Gateway Integration", () => {
   it("registers the three core meta-tools on the server", () => {
     expect(serverInstance.toolIndex.size).toBe(1);
     expect(serverInstance.pool.activeCount).toBe(0);
+  });
+
+  it("sends gateway workflow instructions during MCP initialization", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "sloth-test-client", version: "1.0.0" });
+
+    await Promise.all([serverInstance.server.connect(serverTransport), client.connect(clientTransport)]);
+
+    expect(client.getInstructions()).toBe(SLOTH_GATEWAY_INSTRUCTIONS);
+    await client.close();
   });
 
   it("searches tools and returns formatted compact 1-line signatures", async () => {

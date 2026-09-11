@@ -114,7 +114,10 @@ System Status: HEALTHY. SlothMCP is ready to route tools.
 
 ## Key Features
 
-### 1. Fixed 40-Token Taxonomy (Solves "Discovery Invisibility")
+### 1. Protocol-Native Agent Guidance
+Sloth includes concise workflow instructions in the MCP initialization handshake. Every compatible harness can teach its agent to use `search_tools`, `get_tool_schema`, and `execute_tool` without installing a harness-specific skill.
+
+### 2. Fixed 40-Token Taxonomy (Solves "Discovery Invisibility")
 Hiding tools behind dynamic search usually causes LLMs to ignore MCP and fall back to raw bash `grep` or `find`. 
 
 SlothMCP embeds an alphabetically sorted, deterministic directory tree directly into the description of `search_tools`:
@@ -128,7 +131,7 @@ Available Namespaces & Tools:
 ```
 The model receives 100% global capability visibility upfront for just ~40 tokens.
 
-### 2. In-Memory BM25 Indexer & Compact AST Signatures
+### 3. In-Memory BM25 Indexer & Compact AST Signatures
 - Uses `minisearch` with field-level boosting: `name (5.0)`, `canonical ID (4.0)`, `parameters (2.0)`, `description (1.5)`.
 - Converts verbose JSONSchemas into compact 1-line TypeScript AST signatures:
   ```text
@@ -136,15 +139,15 @@ The model receives 100% global capability visibility upfront for just ~40 tokens
   ```
   Saves **~75% of tokens** on search results compared to raw JSONSchema.
 
-### 3. Configurable Lifecycle: On-Demand by Default vs. Always-On
+### 4. Configurable Lifecycle: On-Demand by Default vs. Always-On
 - **On-Demand (Default):** Processes stay dormant (0 MB RAM). When invoked, they wake up lazily and auto-reap via `SIGTERM` (with 3s `SIGKILL` escalation) after 5 minutes of inactivity.
 - **Always-On:** Need a database or stateful server always running? Set `onDemand: false`. Sloth pre-warms it on gateway startup and disables idle reaping.
 
-### 4. Output Shaper & Context Guard
+### 5. Output Shaper & Context Guard
 - **Tabular Array Compression:** Detects uniform JSON arrays ($\ge 3$ records) and converts them into compact typed CSV tables (`[50]{id,name,status}:`). Yields **65.53% token reduction**.
 - **Smart Sandwich Slicing:** When logs or build outputs exceed 30KB, preserves **20% Head (~6,000 chars)** and **80% Tail (~24,000 chars)**. Critical stack traces, compiler errors, and exit codes at the bottom are never lost.
 
-### 5. Self-Healing Argument Auto-Repair
+### 6. Self-Healing Argument Auto-Repair
 - **Fuzzy Key Matching:** Remaps misnamed keys (e.g. `container_name`, `containerId`, or `target_container` $\to$ `container`) automatically using normalized Levenshtein heuristics.
 - **Type Coercion:** Coerces string numbers (`"8080"` $\to$ `8080`) and booleans (`"true"` $\to$ `true`) to match the target schema.
 - **Error Signatures:** If an argument is missing, returns the exact compact tool signature in the error output for instant single-turn self-correction.

@@ -17,6 +17,8 @@ SlothMCP maintains two clean, isolated directories:
 
 All disk writes are **atomic** (writing to `.tmp` files, flushing to disk, and renaming) to prevent JSON corruption during concurrent operations.
 
+When a client connects, Sloth sends protocol-native MCP instructions that teach the agent to discover tools with `search_tools`, inspect full schemas with `get_tool_schema`, and execute exact discovered names with `execute_tool`. Server and harness configuration remains managed through the `sloth` CLI.
+
 ---
 
 ## 2. Configuration Schema (`~/.config/sloth/mcp.json`)
