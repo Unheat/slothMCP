@@ -179,13 +179,16 @@ SlothMCP ships an agent skill (`skills/sloth-manager/`) that teaches AI coding a
 operate the CLI autonomously — detecting harnesses, installing/migrating, adding servers, and
 ejecting safely with rollback — without any human walkthrough.
 
-To activate it for your agent, symlink it into your agent's user skills directory:
+`sloth install <harness>` automatically copies `sloth-manager` into the agent's user skills directory for supported harnesses (`zcode`, `claude-code`, `antigravity`, `opencode`), and cleans it up on `sloth eject` or `sloth uninstall`:
 
+- **ZCode**: `~/.zcode/skills/sloth-manager`
+- **Claude Code**: `~/.claude/skills/sloth-manager`
+- **Google Antigravity**: `~/.gemini/config/skills/sloth-manager`
+- **OpenCode**: `~/.config/opencode/skills/sloth-manager`
+
+To install Sloth without auto-installing the skill, pass `--no-skill`:
 ```bash
-# ZCode
-ln -s "$(pwd)/skills/sloth-manager" ~/.zcode/skills/sloth-manager
-# Claude Code
-ln -s "$(pwd)/skills/sloth-manager" ~/.claude/skills/sloth-manager
+sloth install zcode --no-skill
 ```
 
 ---
