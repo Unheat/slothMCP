@@ -216,6 +216,23 @@ Built strictly under the **"LazyDev / Ponytail"** engineering philosophy:
 
 ---
 
+## Upgrading
+
+- **Global npm Install:**
+  ```bash
+  npm update -g sloth-mcp
+  # or
+  npm install -g sloth-mcp@latest
+  ```
+  Restart your IDE or agent session. Harness configurations point to the global executable and require no modifications.
+- **Local / Developer Source:**
+  ```bash
+  git pull && npm run build
+  ```
+  Restart your IDE or agent session. The compiled entrypoint (`build/src/index.js`) is updated on disk and loaded immediately on the next session start.
+
+---
+
 ## Testing & Verification
 
 Run the comprehensive test and evaluation suite:
@@ -225,19 +242,20 @@ npm test
 ```
 
 ```text
-✓ test/indexer.test.ts   (5 tests)
-✓ test/cli.test.ts       (4 tests)
-✓ test/config.test.ts    (4 tests)
-✓ test/harnesses.test.ts (4 tests)
-✓ test/shaper.test.ts    (6 tests)
-✓ test/repair.test.ts    (4 tests)
-✓ test/benchmark.test.ts (3 tests)
-✓ test/server.test.ts    (5 tests)
-✓ test/pool.test.ts      (9 tests)
+✓ test/indexer.test.ts      (5 tests)
+✓ test/cli.test.ts          (4 tests)
+✓ test/config.test.ts       (6 tests)
+✓ test/harnesses.test.ts   (16 tests)
+✓ test/shaper.test.ts       (9 tests)
+✓ test/repair.test.ts       (4 tests)
+✓ test/benchmark.test.ts    (3 tests)
+✓ test/result-store.test.ts (16 tests)
+✓ test/server.test.ts       (9 tests)
+✓ test/pool.test.ts         (9 tests)
 
-Test Files: 9 passed (9)
-Tests:      44 passed (44)
-Duration:   ~3.7s
+Test Files: 10 passed (10)
+Tests:      81 passed (81)
+Duration:   ~4.2s
 ```
 
 Compile TypeScript:
