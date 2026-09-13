@@ -317,10 +317,13 @@ export function installSlothToHarness(harnessId: HarnessId, options: InstallOpti
   let existingData: Record<string, unknown> = {};
   let importedCount = 0;
 
-  // Default entry pointing to built Sloth entrypoint
+  // WORKAROUND: compiled modules run from build/src while source modules run from src ->
+  // select the nearest package root so the gateway path never becomes build/build/src/index.js.
+  const moduleDirectory = dirname(new URL(import.meta.url).pathname);
+  const packageRoot = basename(dirname(moduleDirectory)) === "build" ? dirname(dirname(moduleDirectory)) : dirname(moduleDirectory);
   const slothEntry = options.customEntry || {
     command: "node",
-    args: [join(dirname(dirname(new URL(import.meta.url).pathname)), "build", "src", "index.js")],
+    args: [join(packageRoot, "build", "src", "index.js")],
   };
   const normalizedEntry = def.normalizeEntry ? def.normalizeEntry(slothEntry) : slothEntry;
 

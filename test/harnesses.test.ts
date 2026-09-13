@@ -102,6 +102,19 @@ describe("Harness Detection, Import & Installation", () => {
     expect(awsS3?.config.disabled).toBe(true); // preserved as disabled!
   });
 
+  it("writes the existing compiled gateway path in the default Sloth entry", () => {
+    const mockConfigPath = join(tempDir, "default-entry.json");
+    mkdirSync(tempDir, { recursive: true });
+
+    installSlothToHarness("cursor", { customConfigPath: mockConfigPath });
+
+    const installed = JSON.parse(readFileSync(mockConfigPath, "utf-8"));
+    const gatewayPath = installed.mcpServers.sloth.args[0] as string;
+    expect(gatewayPath).not.toContain("build/build");
+    expect(gatewayPath).toMatch(/build\/src\/index\.js$/);
+    expect(existsSync(gatewayPath)).toBe(true);
+  });
+
   it("safely installs Sloth into harness config with automated backup and uninstalls cleanly", () => {
     const mockClaudeConfigPath = join(tempDir, "claude_desktop_config.json");
 
