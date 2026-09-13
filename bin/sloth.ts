@@ -411,13 +411,17 @@ program
   .command("install <harness>")
   .description("Safely configure an AI harness to point to SlothMCP (creates timestamped .bak backup)")
   .option("-m, --migrate", "Import existing servers to Sloth and replace client config with ONLY sloth to eliminate token bloat", false)
-  .action((harnessId: string, options: { migrate?: boolean }) => {
+  .option("--no-skill", "Do not auto-install the sloth-manager skill into the harness skills directory")
+  .action((harnessId: string, options: { migrate?: boolean; skill?: boolean }) => {
     if (!SUPPORTED_HARNESSES[harnessId as HarnessId]) {
       console.error(`[Sloth] Unsupported harness '${harnessId}'. Supported: ${Object.keys(SUPPORTED_HARNESSES).join(", ")}`);
       process.exit(1);
     }
 
-    const res = installSlothToHarness(harnessId as HarnessId, { migrate: options.migrate });
+    const res = installSlothToHarness(harnessId as HarnessId, {
+      migrate: options.migrate,
+      installSkill: options.skill,
+    });
     console.log(`[Sloth] Successfully installed SlothMCP gateway into ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}!`);
     console.log(`[Sloth] Target Config: ${res.configPath}`);
     if (res.backupPath) {
@@ -425,6 +429,9 @@ program
     }
     if (options.migrate && res.importedCount) {
       console.log(`[Sloth] Migrated ${res.importedCount} server(s) to Sloth config. Client config now points exclusively to Sloth.`);
+    }
+    if (res.skillInstalledPath) {
+      console.log(`[Sloth] Installed sloth-manager skill to: ${res.skillInstalledPath}`);
     }
   });
 
@@ -447,6 +454,9 @@ program
       const sourceDesc = res.strategy === "backup" ? `from backup (${res.backupUsed})` : "exported from Sloth configuration";
       console.log(`[Sloth] Successfully restored ${res.ejectedCount} server(s) back into ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName} (${sourceDesc})!`);
       console.log(`[Sloth] SlothMCP has been cleanly detached from ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
+      if (res.skillRemovedPath) {
+        console.log(`[Sloth] Cleaned up sloth-manager skill from: ${res.skillRemovedPath}`);
+      }
     } else {
       console.log(`[Sloth] No servers or backup found to eject for ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
     }
@@ -471,6 +481,9 @@ program
         const sourceDesc = res.strategy === "backup" ? `from backup (${res.backupUsed})` : "exported from Sloth configuration";
         console.log(`[Sloth] Successfully restored ${res.ejectedCount} server(s) back into ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName} (${sourceDesc})!`);
         console.log(`[Sloth] SlothMCP uninstalled from ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
+        if (res.skillRemovedPath) {
+          console.log(`[Sloth] Cleaned up sloth-manager skill from: ${res.skillRemovedPath}`);
+        }
         return;
       }
     }
@@ -478,6 +491,10 @@ program
     const removed = uninstallSlothFromHarness(harnessId as HarnessId);
     if (removed) {
       console.log(`[Sloth] Successfully uninstalled SlothMCP from ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
+      const def = SUPPORTED_HARNESSES[harnessId as HarnessId];
+      if (def.getSkillsPath) {
+        console.log(`[Sloth] Cleaned up sloth-manager skill from: ${def.getSkillsPath()}`);
+      }
     } else {
       console.log(`[Sloth] Sloth was not found or already uninstalled from ${SUPPORTED_HARNESSES[harnessId as HarnessId].displayName}.`);
     }

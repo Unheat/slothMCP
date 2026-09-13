@@ -3,10 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadConfig, saveConfig } from "../src/config.js";
+import { runDoctor } from "../src/doctor.js";
 import {
   ejectHarnessConfig,
+  installHarnessSkill,
   installSlothToHarness,
   readHarnessServers,
+  removeHarnessSkill,
   restoreHarnessFromBackup,
   SUPPORTED_HARNESSES,
   uninstallSlothFromHarness,
@@ -446,3 +449,137 @@ describe("ZCode harness (nested mcp.servers config)", () => {
     expect(k8s.enabled).toBe(false);
   });
 });
+
+describe("Agent Skills Directory & Lifecycle", () => {
+  let tempDir: string;
+  let tempSkillsDir: string;
+  let tempConfigDir: string;
+  let tempCacheDir: string;
+
+  beforeEach(() => {
+    tempDir = join(tmpdir(), `sloth-skills-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tempSkillsDir = join(tempDir, "skills");
+    tempConfigDir = join(tmpdir(), `sloth-skills-cfg-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tempCacheDir = join(tmpdir(), `sloth-skills-cache-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+    process.env.SLOTH_CONFIG_DIR = tempConfigDir;
+    process.env.SLOTH_CACHE_DIR = tempCacheDir;
+  });
+
+  afterEach(() => {
+    if (existsSync(tempDir)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+    if (existsSync(tempConfigDir)) {
+      rmSync(tempConfigDir, { recursive: true, force: true });
+    }
+    if (existsSync(tempCacheDir)) {
+      rmSync(tempCacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves correct skills paths for supported harnesses and undefined for others", () => {
+    expect(SUPPORTED_HARNESSES["zcode"].getSkillsPath?.()).toContain(".zcode/skills");
+    expect(SUPPORTED_HARNESSES["claude-code"].getSkillsPath?.()).toContain(".claude/skills");
+    expect(SUPPORTED_HARNESSES["antigravity"].getSkillsPath?.()).toContain(".gemini/config/skills");
+    expect(SUPPORTED_HARNESSES["opencode"].getSkillsPath?.()).toContain(".config/opencode/skills");
+
+    expect(SUPPORTED_HARNESSES["cursor"].getSkillsPath).toBeUndefined();
+    expect(SUPPORTED_HARNESSES["vscode"].getSkillsPath).toBeUndefined();
+    expect(SUPPORTED_HARNESSES["windsurf"].getSkillsPath).toBeUndefined();
+    expect(SUPPORTED_HARNESSES["claude-desktop"].getSkillsPath).toBeUndefined();
+  });
+
+  it("copies sloth-manager skill to target skills directory and removes it cleanly", () => {
+    const installedPath = installHarnessSkill("zcode", { customSkillsDir: tempSkillsDir });
+    expect(installedPath).toBe(join(tempSkillsDir, "sloth-manager"));
+    expect(existsSync(join(tempSkillsDir, "sloth-manager", "SKILL.md"))).toBe(true);
+
+    const content = readFileSync(join(tempSkillsDir, "sloth-manager", "SKILL.md"), "utf-8");
+    expect(content).toContain("sloth-manager");
+    expect(content).toContain("SlothMCP Manager");
+
+    // Re-installing overwrites cleanly
+    const reinstalledPath = installHarnessSkill("zcode", { customSkillsDir: tempSkillsDir });
+    expect(reinstalledPath).toBe(join(tempSkillsDir, "sloth-manager"));
+    expect(existsSync(join(tempSkillsDir, "sloth-manager", "SKILL.md"))).toBe(true);
+
+    // Remove skill
+    const removedPath = removeHarnessSkill("zcode", { customSkillsDir: tempSkillsDir });
+    expect(removedPath).toBe(join(tempSkillsDir, "sloth-manager"));
+    expect(existsSync(join(tempSkillsDir, "sloth-manager"))).toBe(false);
+
+    // Removing again returns null
+    const removedAgain = removeHarnessSkill("zcode", { customSkillsDir: tempSkillsDir });
+    expect(removedAgain).toBeNull();
+  });
+
+  it("auto-installs sloth-manager skill on installSlothToHarness and supports opt-out", () => {
+    const mockConfigPath = join(tempDir, "config.json");
+    mkdirSync(tempDir, { recursive: true });
+
+    // 1. Install with skill auto-enabled (default)
+    const res = installSlothToHarness("zcode", {
+      customConfigPath: mockConfigPath,
+      customSkillsDir: tempSkillsDir,
+    });
+
+    expect(res.skillInstalledPath).toBe(join(tempSkillsDir, "sloth-manager"));
+    expect(existsSync(join(tempSkillsDir, "sloth-manager", "SKILL.md"))).toBe(true);
+
+    // 2. Install into harness without skill support (e.g. cursor)
+    const mockCursorPath = join(tempDir, "cursor.json");
+    const cursorRes = installSlothToHarness("cursor", {
+      customConfigPath: mockCursorPath,
+    });
+    expect(cursorRes.skillInstalledPath).toBeUndefined();
+
+    // 3. Install with opt-out (installSkill: false)
+    const optOutSkillsDir = join(tempDir, "skills-opt-out");
+    const mockOptOutConfig = join(tempDir, "opt-out-config.json");
+    const optOutRes = installSlothToHarness("zcode", {
+      customConfigPath: mockOptOutConfig,
+      customSkillsDir: optOutSkillsDir,
+      installSkill: false,
+    });
+    expect(optOutRes.skillInstalledPath).toBeUndefined();
+    expect(existsSync(optOutSkillsDir)).toBe(false);
+  });
+
+  it("cleans up skill directory on eject and uninstall", () => {
+    const mockConfigPath = join(tempDir, "config.json");
+    mkdirSync(tempDir, { recursive: true });
+
+    // Install first
+    installSlothToHarness("zcode", {
+      customConfigPath: mockConfigPath,
+      customSkillsDir: tempSkillsDir,
+    });
+    expect(existsSync(join(tempSkillsDir, "sloth-manager", "SKILL.md"))).toBe(true);
+
+    // Eject removes skill
+    const ejectRes = ejectHarnessConfig("zcode", mockConfigPath, { customSkillsDir: tempSkillsDir });
+    expect(ejectRes.skillRemovedPath).toBe(join(tempSkillsDir, "sloth-manager"));
+    expect(existsSync(join(tempSkillsDir, "sloth-manager"))).toBe(false);
+
+    // Re-install and test uninstall
+    installSlothToHarness("zcode", {
+      customConfigPath: mockConfigPath,
+      customSkillsDir: tempSkillsDir,
+    });
+    expect(existsSync(join(tempSkillsDir, "sloth-manager", "SKILL.md"))).toBe(true);
+
+    const uninstalled = uninstallSlothFromHarness("zcode", mockConfigPath, { customSkillsDir: tempSkillsDir });
+    expect(uninstalled).toBe(true);
+    expect(existsSync(join(tempSkillsDir, "sloth-manager"))).toBe(false);
+  });
+
+  it("doctor checks report on environment and harnesses", () => {
+    const checks = runDoctor();
+    expect(checks.length).toBeGreaterThan(0);
+    const envCheck = checks.find((c) => c.category === "Environment");
+    expect(envCheck).toBeDefined();
+    expect(envCheck?.status).toBe("ok");
+  });
+});
+
