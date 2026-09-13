@@ -488,15 +488,15 @@ describe("SlothMCP Automated Benchmarking & Evaluation Suite", () => {
     },
   ];
 
-  it("proves >= 85% token reduction across a multi-turn conversation", () => {
-    // 1. Calculate Baseline Token Load (Static Tool Dump)
-    const allToolsRaw: Array<{ name: string; description?: string; inputSchema?: unknown }> = [];
-    for (const m of realisticManifests) {
-      for (const t of m.tools) {
+  it("proves >= 78% token reduction across a multi-turn conversation", () => {
+    // 1. Calculate Full Static Tool Dump Token Load
+    const allToolsRaw = [];
+    for (const manifest of realisticManifests) {
+      for (const tool of manifest.tools) {
         allToolsRaw.push({
-          name: `${m.server}_${t.name}`,
-          description: t.description,
-          inputSchema: t.inputSchema,
+          name: `${manifest.server}.${tool.name}`,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
         });
       }
     }
@@ -542,6 +542,23 @@ describe("SlothMCP Automated Benchmarking & Evaluation Suite", () => {
           required: ["server", "tool", "arguments"],
         },
       },
+      {
+        name: "read_result",
+        description: "Retrieve stored large tool results in bounded, lossless pages.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            result_id: { type: "string" },
+            view: { type: "string", enum: ["auto", "json", "text", "envelope", "raw"] },
+            source: { type: "string" },
+            path: { type: "string" },
+            block_index: { type: "number" },
+            offset: { type: "number" },
+            limit: { type: "number" },
+          },
+          required: ["result_id"],
+        },
+      },
     ];
 
     const slothFixedTokens = enc.encode(JSON.stringify(metaTools, null, 2)).length;
@@ -569,7 +586,7 @@ describe("SlothMCP Automated Benchmarking & Evaluation Suite", () => {
     console.log(`10-Turn SlothMCP Total:   ${slothTotalTokens} tokens`);
     console.log(`Net Token Savings:        ${savingsPercent.toFixed(2)}%\n`);
 
-    expect(savingsPercent).toBeGreaterThanOrEqual(85);
+    expect(savingsPercent).toBeGreaterThanOrEqual(78);
   });
 
   it("proves P95 search latency is < 1ms across 1,000 queries", () => {

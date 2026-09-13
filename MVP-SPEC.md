@@ -64,7 +64,7 @@
 
 ## 3. Host-Facing MCP Tool Definitions
 
-When the host queries `tools/list`, SlothMCP returns exactly three tools:
+When the host queries `tools/list`, SlothMCP returns exactly four tools:
 
 ### 3.1 `search_tools`
 ```json
@@ -174,6 +174,51 @@ If an error occurs downstream, returns:
   ]
 }
 ```
+
+### 3.4 `read_result`
+```json
+{
+  "name": "read_result",
+  "description": "Retrieve stored large tool results in bounded, lossless pages. Supports JSON-value paging (view: 'json'), complete text lines (view: 'text'), result envelope metadata (view: 'envelope'), or lossless raw UTF-8 fragments (view: 'raw').",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "result_id": {
+        "type": "string",
+        "description": "Opaque result ID returned by execute_tool"
+      },
+      "view": {
+        "type": "string",
+        "enum": ["auto", "json", "text", "envelope", "raw"],
+        "description": "Retrieval view: 'auto', 'json', 'text', 'envelope', or 'raw'"
+      },
+      "source": {
+        "description": "JSON/text source selector ('auto', 'structured', 'root', or block index)"
+      },
+      "path": {
+        "type": "string",
+        "description": "RFC 6901 JSON pointer (e.g. '/items' or '/users/0')"
+      },
+      "block_index": {
+        "type": "number",
+        "description": "Content block index for 'text' view"
+      },
+      "offset": {
+        "type": "number",
+        "description": "Item offset ('json'), line offset ('text'), or byte offset ('raw')"
+      },
+      "limit": {
+        "type": "number",
+        "description": "Max items ('json'), lines ('text'), or bytes ('raw') to return"
+      }
+    },
+    "required": ["result_id"]
+  }
+}
+```
+
+#### Output Format:
+Returns JSON string representing the requested paged view (`JsonView`, `TextView`, `EnvelopeView`, or `RawView`). When `view` is omitted or `"auto"`, the gateway inspects the stored result and delegates to the most appropriate structured view. Small results are returned inline by `execute_tool` without materialization; large results are stored atomically before returning a handle, guaranteeing no duplicate downstream execution.
 
 ---
 

@@ -31,14 +31,14 @@ In standard MCP over `stdio`:
 ```
 
 - **Constraint**: The MCP server never sees the raw user prompt before the LLM runs. Pre-flight schema rewriting is impossible without an external MITM HTTP proxy rewriting API traffic.
-- **Solution**: Discovery is **model-initiated** via three permanent meta-tools, combined with an always-visible namespace directory tree in the description of `search_tools`.
+- **Solution**: Discovery is **model-initiated** via four permanent meta-tools, combined with an always-visible namespace directory tree in the description of `search_tools`.
 
 ---
 
 ## 3. Architecture & Mechanics
 
-### 3.1 The Three Permanent Meta-Tools
-When the host calls `tools/list`, SlothMCP always exposes exactly three stable tools:
+### 3.1 The Four Permanent Meta-Tools
+When the host calls `tools/list`, SlothMCP always exposes exactly four stable tools:
 
 1. **`search_tools(query: string, namespace?: string)`**:
    - Executes in-memory BM25 search over cached tool manifests.
@@ -59,9 +59,14 @@ When the host calls `tools/list`, SlothMCP always exposes exactly three stable t
    - Progressive disclosure: returns the full original JSONSchema on-demand for tools with complex, nested, or strict object parameters.
 
 3. **`execute_tool(server: string, tool: string, arguments: object)`**:
-   - Dispatches tool execution to the downstream MCP server.
-   - Wakes up dormant child processes lazily.
+   - Dispatches tool execution to the downstream MCP server lazily.
+   - If output is within inline limits, returns the exact downstream CallToolResult envelope.
+   - If output is oversized (>30KB), stores it atomically in the instance cache and returns a bounded preview with `result_id`.
    - Catches downstream errors, timeouts, or process crashes and returns standard `{ isError: true, content: [...] }` payloads to prevent host JSON-RPC desynchronization.
+
+4. **`read_result(result_id: string, view?: string, path?: string, offset?: number, limit?: number)`**:
+   - Lossless retrieval of stored large results without duplicate execution.
+   - Supports `json` (complete RFC 6901 JSON values), `text` (complete lines), `envelope` (metadata), and `raw` (exact UTF-8 fragments).
 
 ---
 
@@ -128,7 +133,8 @@ slothMCP/
 │   ├── config.ts              # Config store (~/.config/sloth/mcp.json) + Zod validation + atomic writes
 │   ├── indexer.ts             # MiniSearch BM25 + Compact TS AST Formatter + Dynamic Taxonomy
 │   ├── pool.ts                # Lazy subprocess pool + Single-flight spawn + 5m TTL timer + SIGTERM
-│   └── server.ts              # Stdio MCP Server exposing search_tools, get_tool_schema, execute_tool
+│   ├── result-store.ts        # Instance-isolated atomic result storage + JSON/text/raw retrieval
+│   └── server.ts              # Stdio MCP Server exposing search_tools, get_tool_schema, execute_tool, read_result
 └── test/
     └── benchmark.test.ts      # Vitest + js-tiktoken test (>85% token savings, latency, recall)
 ```

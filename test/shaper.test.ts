@@ -1,11 +1,14 @@
 import { getEncoding } from "js-tiktoken";
 import { describe, expect, it } from "vitest";
 import {
+  createTextPreview,
   escapeCsvField,
   isUniformObjectArray,
   sandwichSlice,
   shapeToolOutput,
+  summarizeJsonStructure,
   tabularizeJsonArray,
+  utf8SafePrefix,
 } from "../src/shaper.js";
 
 describe("Output Shaper & Context Guard", () => {
@@ -90,7 +93,38 @@ describe("Output Shaper & Context Guard", () => {
     expect(sliced).toContain("Process exited with status 1"); // exit code preserved!
   });
 
-  it("proves >= 50% token reduction on realistic multi-column tabular tool output", () => {
+  it("builds valid bounded JSON structural summaries", () => {
+    const summary = summarizeJsonStructure({ alpha: 1, beta: [true], gamma: null }, 2);
+
+    expect(JSON.parse(JSON.stringify(summary))).toEqual({
+      type: "object",
+      keys: ["alpha", "beta"],
+      omittedKeys: 1,
+    });
+    expect(summarizeJsonStructure([1, "two", null, { ok: true }], 3)).toEqual({
+      type: "array",
+      length: 4,
+      itemTypes: ["number", "string", "null"],
+    });
+  });
+
+  it("bounds UTF-8 prefixes without splitting Unicode code points", () => {
+    expect(utf8SafePrefix("A😀B", 5)).toBe("A😀");
+    expect(Buffer.byteLength(utf8SafePrefix("😀😀", 7), "utf8")).toBeLessThanOrEqual(7);
+    expect(utf8SafePrefix("text", 0)).toBe("");
+  });
+
+  it("creates bounded previews from complete lines", () => {
+    const source = `first 😀 line\nsecond line\n${"third line ".repeat(20)}`;
+    const preview = createTextPreview(source, 110);
+
+    expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(110);
+    expect(preview).toContain("first 😀 line\n");
+    expect(preview).not.toContain("second line");
+    expect(preview).toContain("additional complete lines omitted");
+  });
+
+  it("proves >= 50% token reduction on realistic preview-only tabular output", () => {
     // Generate realistic 50-row database/Kubernetes status payload with typical column headers
     const records: Array<Record<string, unknown>> = [];
     for (let i = 1; i <= 50; i++) {

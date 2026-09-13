@@ -34,14 +34,15 @@ Directly loading all tool schemas into the host IDE causes three critical bottle
 ┌─────────────────────────┐
 │ Host IDE (Cursor/Claude)│
 └────────────┬────────────┘
-             │ stdio JSON-RPC (Exposes exactly 3 Meta-Tools: ~500 tokens)
+             │ stdio JSON-RPC (Exposes exactly 4 Meta-Tools: ~700 tokens)
              ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │                          SlothMCP Gateway                              │
 │                                                                        │
-│  • search_tools(query) ──► In-Memory MiniSearch BM25 (P50 = 56 µs)     │
+│  • search_tools(query) ──► In-Memory MiniSearch BM25 (P50 = 51 µs)     │
 │  • get_tool_schema(s,t) ─► Progressive disclosure of raw JSONSchemas   │
-│  • execute_tool(s,t,a) ──► Self-healing argument auto-repair           │
+│  • execute_tool(s,t,a) ──► Inline execution or atomic materialization  │
+│  • read_result(id,view) ─► Progressive lossless retrieval (JSON/raw)   │
 │                                                                        │
 │  Lazy Subprocess Pool (0 MB idle RAM; on-demand spawn + 5m TTL reap)   │
 └──────────────┬─────────────────────────────┬───────────────────────────┘
@@ -60,12 +61,12 @@ All metrics measured on an Apple Silicon M-series machine using the automated be
 
 | Benchmark Metric | Direct MCP (Normal Setup) | SlothMCP Gateway | Net Savings / Impact |
 | :--- | :---: | :---: | :--- |
-| **Input Schema Load (Per Turn)** | 3,613 tokens / turn | **521 tokens / turn** | **85.21% Net Token Reduction** |
-| **10-Turn Conversation Total** | 36,130 tokens | **5,344 tokens** | **30,786 tokens saved** |
+| **Input Schema Load (Per Turn)** | 3,612 tokens / turn | **712 tokens / turn** | **79.92% Net Token Reduction** |
+| **10-Turn Conversation Total** | 36,120 tokens | **7,254 tokens** | **28,866 tokens saved** |
 | **Output Table Bloat (50 records)** | 4,616 tokens | **1,591 tokens** | **65.53% Output Token Reduction** |
-| **Oversized Log Dump (>50KB)** | Floods context (40k+ tokens) | Hard-capped (20% head / 80% tail) | **100% stack trace preservation** |
+| **Oversized Output (>30KB)** | Floods context (40k+ tokens) | Atomic store + bounded preview | **100% lossless recovery via `read_result`** |
 | **Idle Memory (15 servers)** | ~1.5 GB – 2.2 GB RAM | **~18 MB RAM** | **> 98% RAM Savings** |
-| **Search Routing Latency (P95)** | N/A | **0.267 ms (267 µs)** | Instant (< 1ms routing overhead) |
+| **Search Routing Latency (P95)** | N/A | **0.241 ms (241 µs)** | Instant (< 1ms routing overhead) |
 | **Retrieval Accuracy (Precision@3)** | Degrades past 15 tools | **100.00% (12/12)** | Perfect recall via field boosting |
 
 ---
@@ -115,7 +116,7 @@ System Status: HEALTHY. SlothMCP is ready to route tools.
 ## Key Features
 
 ### 1. Protocol-Native Agent Guidance
-Sloth includes concise workflow instructions in the MCP initialization handshake. Every compatible harness can teach its agent to use `search_tools`, `get_tool_schema`, and `execute_tool` without installing a harness-specific skill.
+Sloth includes concise workflow instructions in the MCP initialization handshake. Every compatible harness can teach its agent to use `search_tools`, `get_tool_schema`, `execute_tool`, and `read_result` without installing a harness-specific skill.
 
 ### 2. Fixed 40-Token Taxonomy (Solves "Discovery Invisibility")
 Hiding tools behind dynamic search usually causes LLMs to ignore MCP and fall back to raw bash `grep` or `find`. 
@@ -143,9 +144,10 @@ The model receives 100% global capability visibility upfront for just ~40 tokens
 - **On-Demand (Default):** Processes stay dormant (0 MB RAM). When invoked, they wake up lazily and auto-reap via `SIGTERM` (with 3s `SIGKILL` escalation) after 5 minutes of inactivity.
 - **Always-On:** Need a database or stateful server always running? Set `onDemand: false`. Sloth pre-warms it on gateway startup and disables idle reaping.
 
-### 5. Output Shaper & Context Guard
-- **Tabular Array Compression:** Detects uniform JSON arrays ($\ge 3$ records) and converts them into compact typed CSV tables (`[50]{id,name,status}:`). Yields **65.53% token reduction**.
-- **Smart Sandwich Slicing:** When logs or build outputs exceed 30KB, preserves **20% Head (~6,000 chars)** and **80% Tail (~24,000 chars)**. Critical stack traces, compiler errors, and exit codes at the bottom are never lost.
+### 5. Output Shaper & Progressive Large-Result Retrieval
+- **Verbatim Inline Passthrough ($\le$ 30KB):** Small tool responses pass through untouched as verbatim `CallToolResult` envelopes with 100% structural fidelity.
+- **Atomic Large-Result Materialization (> 30KB):** Oversized results run once and are stored in an instance-isolated cache. `execute_tool` returns a bounded, valid preview and `result_id`.
+- **Lossless Paging (`read_result`):** Agents page through results using `json` (complete RFC 6901 JSON values), `text` (complete lines), `envelope` (metadata), or `raw` (exact UTF-8 bytes). Never slices serialized JSON.
 
 ### 6. Self-Healing Argument Auto-Repair
 - **Fuzzy Key Matching:** Remaps misnamed keys (e.g. `container_name`, `containerId`, or `target_container` $\to$ `container`) automatically using normalized Levenshtein heuristics.
@@ -197,11 +199,11 @@ sloth install zcode --no-skill
 
 For in-depth architectural proofs, protocol specifications, benchmarks, and configuration guides:
 
-- 📖 **[System Architecture & Protocol](docs/architecture.md)** — Stdio JSON-RPC boundary, 3 meta-tools, lazy state machine, single-flight locking.
+- 📖 **[System Architecture & Protocol](docs/architecture.md)** — Stdio JSON-RPC boundary, 4 permanent meta-tools, lazy state machine, single-flight locking.
 - 📊 **[Empirical Benchmarks & Token Proof](docs/benchmarks.md)** — Mathematical token derivation, 1,000-query latency percentiles, precision metrics.
 - 🚀 **[Client Harness Migration Guide](docs/client-migration.md)** — One-click setup and rollback for Cursor, Claude Desktop, VS Code, and Windsurf.
 - ⚙️ **[Configuration & CLI Reference](docs/configuration.md)** — Complete `mcp.json` schema, on-demand vs always-on lifecycle, command matrix.
-- 🛡️ **[Output Shaper & Context Guard](docs/output-shaper.md)** — In-memory tabular shape compression and 20/80 sandwich slicing.
+- 🛡️ **[Output Shaper & Context Guard](docs/output-shaper.md)** — Progressive large-result retrieval, valid JSON navigation, and tabular preview compression.
 
 ---
 

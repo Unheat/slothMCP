@@ -67,6 +67,18 @@ normally never run it manually.
 3. If the user wants Sloth fully gone, repeat for each installed harness before removing
    the package.
 
+**Handling large tool outputs (`read_result`):**
+
+When `execute_tool` runs a downstream tool whose output exceeds `resultInlineMaxBytes` (~30KB),
+it atomically stores the full unmutated result in the local cache and returns a bounded preview
+with an opaque `result_id`.
+
+1. To inspect structured data: `read_result(result_id, view: "json", path: "/items", offset: 0, limit: 20)`
+2. To inspect logs/text: `read_result(result_id, view: "text", offset: 0, limit: 200)`
+3. To inspect metadata/envelope: `read_result(result_id, view: "envelope")`
+4. For exact lossless byte reassembly: `read_result(result_id, view: "raw", offset: 0, limit: 24576)`
+5. **Rule for write/destructive tools:** Never call `execute_tool` again with the same write arguments just to re-fetch omitted output—always use `read_result` with the returned `result_id`.
+
 ## Safety rules
 
 - Never hand-edit a harness config file while the Sloth gateway is installed in it — use

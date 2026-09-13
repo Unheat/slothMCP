@@ -10,6 +10,15 @@ export const DEFAULT_IDLE_TIMEOUT_MS = 300_000;
 /** Default on-demand lifecycle posture (lazy on-demand by default) */
 export const DEFAULT_ON_DEMAND = true;
 
+/** Maximum serialized result size returned inline (30 KiB) */
+export const DEFAULT_RESULT_INLINE_MAX_BYTES = 30 * 1024;
+/** Stored result lifetime (two hours in milliseconds) */
+export const DEFAULT_RESULT_TTL_MS = 2 * 60 * 60 * 1000;
+/** Maximum serialized size of one stored result (64 MiB) */
+export const DEFAULT_RESULT_MAX_ENTRY_BYTES = 64 * 1024 * 1024;
+/** Maximum aggregate serialized size of stored results (256 MiB) */
+export const DEFAULT_RESULT_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+
 /**
  * Zod schema for individual MCP tool input parameters
  */
@@ -38,14 +47,37 @@ export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 /**
  * Zod schema for global SlothMCP configuration (~/.config/sloth/mcp.json)
  */
-export const SlothConfigSchema = z.object({
-  $schema: z.string().optional(),
-  idleTimeoutMs: z.number().int().positive().optional().default(DEFAULT_IDLE_TIMEOUT_MS),
-  defaultOnDemand: z.boolean().optional().default(DEFAULT_ON_DEMAND),
-  servers: z.record(z.string(), ServerConfigSchema).default({}),
-});
+export const SlothConfigSchema = z
+  .object({
+    $schema: z.string().optional(),
+    idleTimeoutMs: z.number().int().positive().optional().default(DEFAULT_IDLE_TIMEOUT_MS),
+    defaultOnDemand: z.boolean().optional().default(DEFAULT_ON_DEMAND),
+    resultInlineMaxBytes: z.number().int().positive().optional().default(DEFAULT_RESULT_INLINE_MAX_BYTES),
+    resultTtlMs: z.number().int().positive().optional().default(DEFAULT_RESULT_TTL_MS),
+    resultMaxEntryBytes: z.number().int().positive().optional().default(DEFAULT_RESULT_MAX_ENTRY_BYTES),
+    resultMaxTotalBytes: z.number().int().positive().optional().default(DEFAULT_RESULT_MAX_TOTAL_BYTES),
+    servers: z.record(z.string(), ServerConfigSchema).default({}),
+  })
+  .refine((config) => config.resultInlineMaxBytes <= config.resultMaxEntryBytes, {
+    message: "resultInlineMaxBytes must be less than or equal to resultMaxEntryBytes",
+    path: ["resultInlineMaxBytes"],
+  })
+  .refine((config) => config.resultMaxEntryBytes <= config.resultMaxTotalBytes, {
+    message: "resultMaxEntryBytes must be less than or equal to resultMaxTotalBytes",
+    path: ["resultMaxEntryBytes"],
+  });
 
-export type SlothConfig = z.infer<typeof SlothConfigSchema>;
+export type ValidatedSlothConfig = z.output<typeof SlothConfigSchema>;
+export type SlothConfig = Omit<
+  ValidatedSlothConfig,
+  "resultInlineMaxBytes" | "resultTtlMs" | "resultMaxEntryBytes" | "resultMaxTotalBytes"
+> &
+  Partial<
+    Pick<
+      ValidatedSlothConfig,
+      "resultInlineMaxBytes" | "resultTtlMs" | "resultMaxEntryBytes" | "resultMaxTotalBytes"
+    >
+  >;
 
 /**
  * Zod schema for cached manifest files (~/.cache/sloth/manifests/<server>.json)
@@ -154,14 +186,10 @@ export function writeJsonAtomic(filePath: string, data: unknown): void {
  *
  * @returns Validated SlothConfig object
  */
-export function loadConfig(): SlothConfig {
+export function loadConfig(): ValidatedSlothConfig {
   const configPath = getConfigPath();
   if (!existsSync(configPath)) {
-    return {
-      idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
-      defaultOnDemand: DEFAULT_ON_DEMAND,
-      servers: {},
-    };
+    return SlothConfigSchema.parse({});
   }
 
   try {
@@ -170,11 +198,7 @@ export function loadConfig(): SlothConfig {
     return SlothConfigSchema.parse(parsed);
   } catch (error) {
     console.error(`[SlothConfig] Error parsing config at ${configPath}:`, error);
-    return {
-      idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
-      defaultOnDemand: DEFAULT_ON_DEMAND,
-      servers: {},
-    };
+    return SlothConfigSchema.parse({});
   }
 }
 
