@@ -1,11 +1,11 @@
-import { copyFileSync, existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { loadConfig, saveConfig, writeJsonAtomic, type ServerConfig } from "./config.js";
 
 // Donor code provenance: no code in this module is copied or adapted from any
 // repository under reference/ — all implementation is local (see
-// .zcode/plans/plan-zcode-harness.md).
+// .zcode/plans/plan-zcode-harness.md and .zcode/plans/plan-harness-skills-path.md).
 
 export type HarnessId =
   | "claude-desktop"
@@ -26,6 +26,12 @@ export interface HarnessDefinition {
    */
   configKey: string;
   getPath: (platform?: NodeJS.Platform) => string;
+  /**
+   * Optional getter resolving the user-level skills directory for harnesses
+   * that natively support an Agent Skills directory (e.g. ~/.zcode/skills).
+   * Returns undefined for harnesses without native skill support.
+   */
+  getSkillsPath?: (platform?: NodeJS.Platform) => string;
   /**
    * Optional hook to reshape a server entry before writing it into this
    * harness's config, for harnesses whose entry schema differs from the
@@ -61,6 +67,7 @@ export const SUPPORTED_HARNESSES: Record<HarnessId, HarnessDefinition> = {
     displayName: "Claude Code CLI",
     configKey: "mcpServers",
     getPath: () => join(homedir(), ".claude.json"),
+    getSkillsPath: () => join(homedir(), ".claude", "skills"),
   },
   windsurf: {
     id: "windsurf",
@@ -88,18 +95,21 @@ export const SUPPORTED_HARNESSES: Record<HarnessId, HarnessDefinition> = {
     displayName: "Google Antigravity",
     configKey: "mcpServers",
     getPath: () => join(homedir(), ".gemini", "antigravity", "mcp_config.json"),
+    getSkillsPath: () => join(homedir(), ".gemini", "config", "skills"),
   },
   opencode: {
     id: "opencode",
     displayName: "OpenCode",
     configKey: "mcp",
     getPath: () => join(homedir(), ".config", "opencode", "opencode.json"),
+    getSkillsPath: () => join(homedir(), ".config", "opencode", "skills"),
   },
   zcode: {
     id: "zcode",
     displayName: "ZCode",
     configKey: "mcp.servers",
     getPath: () => join(homedir(), ".zcode", "cli", "config.json"),
+    getSkillsPath: () => join(homedir(), ".zcode", "skills"),
     // ZCode's config parser is strict: unknown keys (e.g. "disabled") cause the
     // server to be silently dropped, so entries must use type/enabled instead.
     normalizeEntry: (entry) => {
@@ -287,25 +297,96 @@ export function findLatestBackup(configPath: string): string | null {
   }
 }
 
+/**
+ * Resolves the root directory of the slothMCP package from either src/ or build/src/.
+ */
+export function getPackageRoot(): string {
+  const moduleDirectory = dirname(new URL(import.meta.url).pathname);
+  return basename(dirname(moduleDirectory)) === "build" ? dirname(dirname(moduleDirectory)) : dirname(moduleDirectory);
+}
+
+export interface SkillInstallOptions {
+  customSkillsDir?: string;
+  sourceSkillDir?: string;
+}
+
+/**
+ * Copies the sloth-manager skill into the harness's user skills directory if supported.
+ *
+ * @param harnessId - Target harness ID
+ * @param options - Optional custom skills destination or source override
+ * @returns Absolute path of the installed skill directory, or null if harness does not support skills
+ */
+export function installHarnessSkill(harnessId: HarnessId, options: SkillInstallOptions = {}): string | null {
+  const def = SUPPORTED_HARNESSES[harnessId];
+  if (!def) return null;
+
+  const skillsDir = options.customSkillsDir || def.getSkillsPath?.();
+  if (!skillsDir) return null;
+
+  const packageRoot = getPackageRoot();
+  const sourceSkillDir = options.sourceSkillDir || join(packageRoot, "skills", "sloth-manager");
+  if (!existsSync(sourceSkillDir)) return null;
+
+  const targetDir = join(skillsDir, "sloth-manager");
+  if (existsSync(targetDir)) {
+    rmSync(targetDir, { recursive: true, force: true });
+  }
+
+  mkdirSync(targetDir, { recursive: true });
+  cpSync(sourceSkillDir, targetDir, { recursive: true });
+  return targetDir;
+}
+
+export interface SkillRemoveOptions {
+  customSkillsDir?: string;
+}
+
+/**
+ * Removes the sloth-manager skill from the harness's user skills directory if present.
+ *
+ * @param harnessId - Target harness ID
+ * @param options - Optional custom skills destination override
+ * @returns Absolute path of the removed skill directory, or null if not found/unsupported
+ */
+export function removeHarnessSkill(harnessId: HarnessId, options: SkillRemoveOptions = {}): string | null {
+  const def = SUPPORTED_HARNESSES[harnessId];
+  if (!def) return null;
+
+  const skillsDir = options.customSkillsDir || def.getSkillsPath?.();
+  if (!skillsDir) return null;
+
+  const targetDir = join(skillsDir, "sloth-manager");
+  if (existsSync(targetDir)) {
+    rmSync(targetDir, { recursive: true, force: true });
+    return targetDir;
+  }
+  return null;
+}
+
 export interface InstallResult {
   backupPath: string;
   configPath: string;
   importedCount?: number;
+  skillInstalledPath?: string;
 }
 
 export interface InstallOptions {
   migrate?: boolean; // When true: imports all existing servers into Sloth and replaces them in client config with only 'sloth'
   customConfigPath?: string;
+  customSkillsDir?: string;
   customEntry?: { command: string; args: string[] };
+  installSkill?: boolean; // When true (default), auto-installs sloth-manager skill into harness skills directory
 }
 
 /**
  * Safely injects SlothMCP into a client harness with an automated timestamped backup.
  * Supports `--migrate` mode to import existing servers and clean up the client config.
+ * Automatically installs the sloth-manager skill for harnesses that support it unless disabled.
  *
  * @param harnessId - Identifier of target client harness
  * @param options - InstallOptions controlling migration, custom path, or custom entry
- * @returns InstallResult containing backupPath, configPath, and imported server count
+ * @returns InstallResult containing backupPath, configPath, imported server count, and optional skillInstalledPath
  */
 export function installSlothToHarness(harnessId: HarnessId, options: InstallOptions = {}): InstallResult {
   const def = SUPPORTED_HARNESSES[harnessId];
@@ -319,13 +400,21 @@ export function installSlothToHarness(harnessId: HarnessId, options: InstallOpti
 
   // WORKAROUND: compiled modules run from build/src while source modules run from src ->
   // select the nearest package root so the gateway path never becomes build/build/src/index.js.
-  const moduleDirectory = dirname(new URL(import.meta.url).pathname);
-  const packageRoot = basename(dirname(moduleDirectory)) === "build" ? dirname(dirname(moduleDirectory)) : dirname(moduleDirectory);
+  const packageRoot = getPackageRoot();
   const slothEntry = options.customEntry || {
     command: "node",
     args: [join(packageRoot, "build", "src", "index.js")],
   };
   const normalizedEntry = def.normalizeEntry ? def.normalizeEntry(slothEntry) : slothEntry;
+
+  // Install skill if supported and not opted out
+  let skillInstalledPath: string | undefined;
+  if (options.installSkill !== false) {
+    const installed = installHarnessSkill(harnessId, { customSkillsDir: options.customSkillsDir });
+    if (installed) {
+      skillInstalledPath = installed;
+    }
+  }
 
   if (existsSync(configPath)) {
     // 1. Create timestamped backup
@@ -363,14 +452,19 @@ export function installSlothToHarness(harnessId: HarnessId, options: InstallOpti
     }
 
     writeJsonAtomic(configPath, existingData);
-    return { backupPath, configPath, importedCount };
+    return { backupPath, configPath, importedCount, skillInstalledPath };
   } else {
     // Create fresh config
     ensureServerSection(existingData, def.configKey)["sloth"] = normalizedEntry;
 
     writeJsonAtomic(configPath, existingData);
-    return { backupPath: "", configPath, importedCount: 0 };
+    return { backupPath: "", configPath, importedCount: 0, skillInstalledPath };
   }
+}
+
+export interface EjectOptions {
+  customSkillsDir?: string;
+  removeSkill?: boolean;
 }
 
 export interface EjectResult {
@@ -378,11 +472,12 @@ export interface EjectResult {
   strategy: "backup" | "exported" | "not_needed";
   backupUsed?: string;
   ejectedCount: number;
+  skillRemovedPath?: string;
 }
 
 /**
  * Unified shared logic to put back all MCP servers into the client harness configuration
- * and remove the 'sloth' gateway entry.
+ * and remove the 'sloth' gateway entry. Also cleans up the sloth-manager skill if installed.
  *
  * Strategy 1 (Priority): If a timestamped .bak backup exists, restores it byte-for-byte.
  * Strategy 2 (Fallback): If no backup exists, dynamically exports all servers from Sloth's
@@ -394,12 +489,26 @@ export interface EjectResult {
  *
  * @param harnessId - Identifier of target client harness (e.g. 'cursor', 'claude-desktop')
  * @param customConfigPath - Optional custom configuration file path for testing
- * @returns EjectResult detailing restored status, strategy used, and restored server count
+ * @param options - Optional EjectOptions controlling skill removal and custom directories
+ * @returns EjectResult detailing restored status, strategy used, restored server count, and optional skillRemovedPath
  */
-export function ejectHarnessConfig(harnessId: HarnessId, customConfigPath?: string): EjectResult {
+export function ejectHarnessConfig(
+  harnessId: HarnessId,
+  customConfigPath?: string,
+  options: EjectOptions = {}
+): EjectResult {
   const def = SUPPORTED_HARNESSES[harnessId];
   if (!def) {
     throw new Error(`Unsupported harness '${harnessId}'.`);
+  }
+
+  // Remove skill if present and not opted out
+  let skillRemovedPath: string | undefined;
+  if (options.removeSkill !== false) {
+    const removed = removeHarnessSkill(harnessId, { customSkillsDir: options.customSkillsDir });
+    if (removed) {
+      skillRemovedPath = removed;
+    }
   }
 
   const configPath = customConfigPath || def.getPath();
@@ -429,12 +538,13 @@ export function ejectHarnessConfig(harnessId: HarnessId, customConfigPath?: stri
       strategy: "backup",
       backupUsed: latestBackup,
       ejectedCount,
+      skillRemovedPath,
     };
   }
 
   // Strategy 2: Dynamic export fallback from Sloth config
   if (!existsSync(configPath)) {
-    return { restored: false, strategy: "not_needed", ejectedCount: 0 };
+    return { restored: false, strategy: "not_needed", ejectedCount: 0, skillRemovedPath };
   }
 
   try {
@@ -468,10 +578,11 @@ export function ejectHarnessConfig(harnessId: HarnessId, customConfigPath?: stri
       restored: hadSloth || exportedCount > 0,
       strategy: "exported",
       ejectedCount: exportedCount,
+      skillRemovedPath,
     };
   } catch (err) {
     console.error(`[SlothHarness] Failed to dynamically eject servers into ${def.displayName}:`, err);
-    return { restored: false, strategy: "not_needed", ejectedCount: 0 };
+    return { restored: false, strategy: "not_needed", ejectedCount: 0, skillRemovedPath };
   }
 }
 
@@ -479,6 +590,7 @@ export interface RestoreResult {
   restored: boolean;
   backupUsed?: string;
   ejectedCount?: number;
+  skillRemovedPath?: string;
 }
 
 /**
@@ -487,28 +599,43 @@ export interface RestoreResult {
  *
  * @param harnessId - Identifier of target harness
  * @param customConfigPath - Optional custom configuration file path for testing
+ * @param options - Optional EjectOptions controlling skill removal and custom directories
  * @returns RestoreResult with restored boolean status and backupUsed path
  */
-export function restoreHarnessFromBackup(harnessId: HarnessId, customConfigPath?: string): RestoreResult {
-  const res = ejectHarnessConfig(harnessId, customConfigPath);
+export function restoreHarnessFromBackup(
+  harnessId: HarnessId,
+  customConfigPath?: string,
+  options: EjectOptions = {}
+): RestoreResult {
+  const res = ejectHarnessConfig(harnessId, customConfigPath, options);
   return {
     restored: res.restored,
     backupUsed: res.backupUsed,
     ejectedCount: res.ejectedCount,
+    skillRemovedPath: res.skillRemovedPath,
   };
 }
 
 /**
- * Uninstalls SlothMCP from a client harness by removing the 'sloth' entry.
+ * Uninstalls SlothMCP from a client harness by removing the 'sloth' entry and cleaning up its skill.
  *
  * @param harnessId - Identifier of target harness
  * @param customConfigPath - Optional custom configuration file path for testing
+ * @param options - Optional options for skill removal and custom directories
  * @returns Boolean indicating whether sloth was found and removed
  */
-export function uninstallSlothFromHarness(harnessId: HarnessId, customConfigPath?: string): boolean {
+export function uninstallSlothFromHarness(
+  harnessId: HarnessId,
+  customConfigPath?: string,
+  options: { customSkillsDir?: string; removeSkill?: boolean } = {}
+): boolean {
   const def = SUPPORTED_HARNESSES[harnessId];
   if (!def) {
     throw new Error(`Unsupported harness '${harnessId}'.`);
+  }
+
+  if (options.removeSkill !== false) {
+    removeHarnessSkill(harnessId, { customSkillsDir: options.customSkillsDir });
   }
 
   const configPath = customConfigPath || def.getPath();

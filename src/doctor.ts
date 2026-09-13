@@ -1,7 +1,8 @@
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { getConfigDir, getManifestsDir, loadAllManifests, loadConfig } from "./config.js";
-import { detectHarnesses } from "./harnesses.js";
+import { detectHarnesses, SUPPORTED_HARNESSES } from "./harnesses.js";
 
 /** Minimum supported Node.js major runtime version */
 export const MIN_SUPPORTED_NODE_MAJOR = 20;
@@ -57,7 +58,7 @@ export function runDoctor(): HealthCheckResult[] {
     message: manifestsDir,
   });
 
-  // 3. Check Detected AI Client Harnesses
+  // 3. Check Detected AI Client Harnesses & Agent Skills
   const harnesses = detectHarnesses();
   const installedCount = harnesses.filter((h) => h.installed).length;
   const activeSlothCount = harnesses.filter((h) => h.hasSlothConfigured).length;
@@ -68,6 +69,31 @@ export function runDoctor(): HealthCheckResult[] {
     status: installedCount > 0 ? "ok" : "warn",
     message: `${installedCount} client(s) detected, ${activeSlothCount} integrated with Sloth`,
   });
+
+  for (const h of harnesses) {
+    if (h.installed && h.hasSlothConfigured) {
+      const def = SUPPORTED_HARNESSES[h.id];
+      if (def?.getSkillsPath) {
+        const skillsDir = def.getSkillsPath();
+        const skillFilePath = join(skillsDir, "sloth-manager", "SKILL.md");
+        if (existsSync(skillFilePath)) {
+          results.push({
+            category: "Skills",
+            name: `${def.displayName} Agent Skill`,
+            status: "ok",
+            message: `sloth-manager installed at ${skillFilePath}`,
+          });
+        } else {
+          results.push({
+            category: "Skills",
+            name: `${def.displayName} Agent Skill`,
+            status: "warn",
+            message: `Missing sloth-manager skill in ${skillsDir}. Run 'sloth install ${h.id}' to install.`,
+          });
+        }
+      }
+    }
+  }
 
   // 4. Check Registered Downstream Servers
   const config = loadConfig();
