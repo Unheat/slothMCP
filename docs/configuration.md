@@ -14,10 +14,13 @@ SlothMCP maintains two clean, isolated directories:
 2. **Manifest Cache**: `~/.cache/sloth/manifests/<server>.json`
    - Stores introspected tool definitions, descriptions, JSONSchemas, and SHA-256 fingerprints.
    - Overrideable via `SLOTH_CACHE_DIR` environment variable.
+3. **Large Result Store**: `~/.cache/sloth/results/<instance-id>/<result-id>`
+   - Atomically stores complete unmutated tool execution envelopes exceeding `resultInlineMaxBytes`.
+   - Managed with owner-only permissions, automated TTL eviction, aggregate byte limits, and instance cleanup.
 
 All disk writes are **atomic** (writing to `.tmp` files, flushing to disk, and renaming) to prevent JSON corruption during concurrent operations.
 
-When a client connects, Sloth sends protocol-native MCP instructions that teach the agent to discover tools with `search_tools`, inspect full schemas with `get_tool_schema`, and execute exact discovered names with `execute_tool`. Server and harness configuration remains managed through the `sloth` CLI.
+When a client connects, Sloth sends protocol-native MCP instructions that teach the agent to discover tools with `search_tools`, inspect full schemas with `get_tool_schema`, execute tools with `execute_tool`, and retrieve oversized outputs with `read_result`. Server and harness configuration remains managed through the `sloth` CLI.
 
 ---
 
@@ -28,6 +31,10 @@ When a client connects, Sloth sends protocol-native MCP instructions that teach 
   "$schema": "http://json-schema.org/draft-07/schema#",
   "idleTimeoutMs": 300000,
   "defaultOnDemand": true,
+  "resultInlineMaxBytes": 30720,
+  "resultTtlMs": 7200000,
+  "resultMaxEntryBytes": 67108864,
+  "resultMaxTotalBytes": 268435456,
   "servers": {
     "docker": {
       "command": "npx",
@@ -56,6 +63,10 @@ When a client connects, Sloth sends protocol-native MCP instructions that teach 
 | :--- | :--- | :--- | :--- |
 | `idleTimeoutMs` | number | `300000` (5m) | Inactivity timeout in milliseconds before an idle on-demand child process is reaped. |
 | `defaultOnDemand`| boolean | `true` | Global default lifecycle mode. `true` = lazy spawn on demand; `false` = always-on persistent. |
+| `resultInlineMaxBytes` | number | `30720` (30KB) | Maximum serialized byte size of a tool result returned inline before materialization. |
+| `resultTtlMs` | number | `7200000` (2h) | Expiration TTL in milliseconds for materialized tool results. |
+| `resultMaxEntryBytes` | number | `67108864` (64MB) | Maximum serialized byte size for any single materialized result entry. |
+| `resultMaxTotalBytes` | number | `268435456` (256MB) | Maximum aggregate disk usage for stored results per gateway instance before eviction. |
 | `servers` | object | `{}` | Map of registered downstream MCP servers keyed by unique server namespace name. |
 
 ### Per-Server Fields:

@@ -1,4 +1,4 @@
-import { Client } from "@modelcontextprotocol/client";
+import { Client, type CallToolResult } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { computeSchemaFingerprint, saveManifest, type ServerConfig, type ToolDefinition } from "./config.js";
 
@@ -259,7 +259,7 @@ export class ProcessPool {
     serverName: string,
     toolName: string,
     args: Record<string, unknown> = {}
-  ): Promise<unknown> {
+  ): Promise<CallToolResult> {
     const client = await this.acquire(serverName);
     try {
       const result = await client.callTool({

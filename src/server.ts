@@ -1,10 +1,23 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { loadAllManifests, loadConfig, type SlothConfig } from "./config.js";
+import {
+  DEFAULT_RESULT_INLINE_MAX_BYTES,
+  loadAllManifests,
+  loadConfig,
+  SlothConfigSchema,
+  type SlothConfig,
+  type ValidatedSlothConfig,
+} from "./config.js";
 import { buildTaxonomy, formatCompactSignature, ToolIndex } from "./indexer.js";
 import { ProcessPool } from "./pool.js";
-import { shapeToolOutput } from "./shaper.js";
+import {
+  ResultStore,
+  measureCallToolResult,
+  recommendResultView,
+} from "./result-store.js";
+import { createTextPreview, summarizeJsonStructure, DEFAULT_PREVIEW_MAX_BYTES } from "./shaper.js";
 
 /**
  * Protocol-native guidance sent to every MCP client during initialization.
@@ -16,8 +29,18 @@ export const SLOTH_GATEWAY_INSTRUCTIONS = `SlothMCP is an aggregation gateway fo
 DISCOVERY: Call search_tools first to find relevant tools before assuming a capability is unavailable.
 SCHEMA: Call get_tool_schema when you need the full schema for a discovered tool.
 EXECUTION: Call execute_tool with the exact server and tool names returned by discovery.
+LARGE OUTPUTS: Results exceeding the inline limit are materialized atomically; execute_tool returns a valid preview and a result_id. Call read_result with that result_id to retrieve complete JSON values (view: "json"), text lines (view: "text"), envelope metadata (view: "envelope"), or lossless raw bytes (view: "raw"). For read-only operations, narrowing search arguments is often more efficient than reading all pages. Never repeat write or destructive calls to retrieve omitted output.
 MANAGEMENT: Use the sloth CLI commands list, add, sync, and doctor to manage downstream servers.
 HARNESS CONFIG: Installing, ejecting, or uninstalling Sloth changes user configuration; ask the user before performing those operations.`;
+
+/** donor code provenance
+ *
+ * | Local symbol | Reuse type | Exact donor location | Deliberate changes |
+ * | --- | --- | --- | --- |
+ * | `src.server.SLOTH_GATEWAY_INSTRUCTIONS` | adapted | `reference/mcpproxy-go/internal/server/mcp.go:74-83`, `defaultInstructions` | Rewritten for Sloth's meta-tools and CLI boundary; registry, routing-mode, and project-link guidance removed. |
+ * | `src.server.execute_tool` envelope forwarding | adapted | `reference/mcpproxy-go/internal/server/content_forward.go:39-138`, `forwardContentResult` | Preserve the complete `CallToolResult`; return small results unchanged and materialize the full envelope when oversized. |
+ * | `src.server.read_result` | adapted | `reference/mcpproxy-go/internal/server/mcp.go:1105-1123`, `read_cache` registration | Expose one strict retrieval tool with explicit views and hard output limits. |
+ */
 
 /**
  * Normalizes a parameter key string for fuzzy comparison (e.g. container_name -> containername)
@@ -109,6 +132,7 @@ export interface SlothServerInstance {
   server: McpServer;
   toolIndex: ToolIndex;
   pool: ProcessPool;
+  resultStore: ResultStore;
   reload: () => void;
   start: () => Promise<void>;
   stop: () => Promise<void>;
@@ -117,18 +141,21 @@ export interface SlothServerInstance {
 export interface CreateServerOptions {
   config?: SlothConfig;
   customManifests?: ReturnType<typeof loadAllManifests>;
+  resultStore?: ResultStore;
 }
 
 /**
  * Creates and configures the SlothMCP Gateway Server.
  * Initialises the in-memory BM25 indexer, process pool, dynamic taxonomy generator,
- * argument auto-repair handler, and output shaper.
+ * argument auto-repair handler, result store, and output shaper.
  *
- * @param options - Optional server configuration overrides and custom manifests for testing
+ * @param options - Optional server configuration overrides, result store, and custom manifests for testing
  * @returns Configured SlothServerInstance with start, stop, and reload lifecycle controls
  */
 export function createSlothServer(options: CreateServerOptions = {}): SlothServerInstance {
-  let config = options.config || loadConfig();
+  let config: ValidatedSlothConfig = options.config
+    ? SlothConfigSchema.parse(options.config)
+    : loadConfig();
   const toolIndex = new ToolIndex();
   const pool = new ProcessPool({
     idleTimeoutMs: config.idleTimeoutMs,
@@ -138,8 +165,16 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
     },
   });
 
+  const resultStore =
+    options.resultStore ??
+    new ResultStore({
+      ttlMs: config.resultTtlMs,
+      maxEntryBytes: config.resultMaxEntryBytes,
+      maxTotalBytes: config.resultMaxTotalBytes,
+    });
+
   const reload = () => {
-    config = options.config || loadConfig();
+    config = options.config ? SlothConfigSchema.parse(options.config) : loadConfig();
     const manifests = options.customManifests || loadAllManifests();
 
     // Map tags from config
@@ -282,35 +317,94 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
       }
 
       try {
-        const result = await pool.executeTool(server, tool, finalArgs);
-        const callResult = result as { content?: Array<{ type: string; text?: string }>; isError?: boolean } | undefined;
+        const rawResult = await pool.executeTool(server, tool, finalArgs);
+        const serializedBytes = measureCallToolResult(rawResult);
+        const inlineLimit = config.resultInlineMaxBytes ?? DEFAULT_RESULT_INLINE_MAX_BYTES;
 
-        if (callResult && Array.isArray(callResult.content) && callResult.content.length > 0) {
-          const textItems = callResult.content.map((item) => {
-            if (item.type === "text") {
-              return {
-                type: "text" as const,
-                text: shapeToolOutput(item.text ?? ""),
-              };
-            }
-            return item as { type: "text"; text: string };
-          });
+        if (serializedBytes <= inlineLimit) {
+          // Under inline limit: return unchanged original CallToolResult
+          return rawResult;
+        }
 
+        // Oversized result: materialize atomically
+        let storedInfo;
+        try {
+          storedInfo = await resultStore.materialize(rawResult);
+        } catch (matError) {
+          const matMessage = matError instanceof Error ? matError.message : String(matError);
           return {
-            isError: callResult.isError,
-            content: textItems,
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: `Execution succeeded for '${server}:${tool}', but result (${serializedBytes} bytes) could not be stored: ${matMessage}`,
+              },
+            ],
           };
         }
 
-        const rawText = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-        return {
-          isError: false,
-          content: [
-            {
+        // Build bounded preview
+        const recommendation = recommendResultView(rawResult);
+        const previewBlocks: Array<{ type: "text"; text: string }> = [];
+
+        const summaryLines = [
+          `[SlothMCP] Tool result (${storedInfo.bytes} bytes) exceeds inline limit (${inlineLimit} bytes).`,
+          `Complete result stored with ID: ${storedInfo.id}`,
+          `Expires at: ${storedInfo.expiresAt} (SHA-256: ${storedInfo.sha256.slice(0, 16)}...)`,
+          `Recommended view: ${recommendation.recommendedView} (${recommendation.reason})`,
+          `To retrieve: call read_result with result_id: "${storedInfo.id}", view: "${recommendation.recommendedView}"`,
+          `Note: For read-only operations, narrowing search arguments is often faster and uses fewer tokens than reading all pages. Never repeat write/destructive calls to retrieve omitted output.`,
+        ];
+
+        previewBlocks.push({ type: "text" as const, text: summaryLines.join("\n") });
+
+        if (recommendation.recommendedView === "json") {
+          let previewData: unknown;
+          if (rawResult.structuredContent !== undefined) {
+            previewData = summarizeJsonStructure(rawResult.structuredContent);
+          } else if (Array.isArray(rawResult.content) && rawResult.content.length > 0) {
+            const first = rawResult.content[0];
+            if (
+              typeof first === "object" &&
+              first !== null &&
+              "type" in first &&
+              first.type === "text" &&
+              "text" in first &&
+              typeof first.text === "string"
+            ) {
+              try {
+                previewData = summarizeJsonStructure(JSON.parse(first.text));
+              } catch {
+                previewData = createTextPreview(first.text, DEFAULT_PREVIEW_MAX_BYTES);
+              }
+            }
+          }
+          if (previewData) {
+            previewBlocks.push({
               type: "text" as const,
-              text: shapeToolOutput(rawText),
-            },
-          ],
+              text: `Preview (${recommendation.source ?? "auto"}):\n${JSON.stringify(previewData, null, 2)}`,
+            });
+          }
+        } else if (recommendation.recommendedView === "text") {
+          const first = Array.isArray(rawResult.content) ? rawResult.content[0] : undefined;
+          if (
+            typeof first === "object" &&
+            first !== null &&
+            "type" in first &&
+            first.type === "text" &&
+            "text" in first &&
+            typeof first.text === "string"
+          ) {
+            previewBlocks.push({
+              type: "text" as const,
+              text: `Preview:\n${createTextPreview(first.text, DEFAULT_PREVIEW_MAX_BYTES)}`,
+            });
+          }
+        }
+
+        return {
+          isError: rawResult.isError,
+          content: previewBlocks,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -335,6 +429,123 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
     }
   );
 
+  // 4. Register read_result meta-tool
+  mcpServer.registerTool(
+    "read_result",
+    {
+      description:
+        "Retrieve stored large tool results in bounded, lossless pages. Supports JSON-value paging (view: 'json'), complete text lines (view: 'text'), result envelope metadata (view: 'envelope'), or lossless raw UTF-8 fragments (view: 'raw').",
+      inputSchema: z.object({
+        result_id: z.string().describe("Opaque result ID returned by execute_tool"),
+        view: z
+          .enum(["auto", "json", "text", "envelope", "raw"])
+          .optional()
+          .default("auto")
+          .describe(
+            "Retrieval view: 'auto' (recommended), 'json' (complete JSON values), 'text' (complete lines), 'envelope' (metadata), or 'raw' (lossless bytes)"
+          ),
+        source: z
+          .union([z.literal("auto"), z.literal("structured"), z.literal("root"), z.number().int().nonnegative()])
+          .optional()
+          .describe("JSON/text source: 'auto', 'structured', 'root', or content block index"),
+        path: z
+          .string()
+          .optional()
+          .describe("RFC 6901 JSON pointer (e.g. '/results' or '/users/0') for 'json' or 'text' view"),
+        block_index: z.number().int().nonnegative().optional().describe("Content block index for 'text' view"),
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Array item offset for 'json' view, line offset for 'text' view, or byte offset for 'raw' view (default: 0)"),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Max items ('json' view), lines ('text' view), or bytes ('raw' view) to return"),
+      }),
+    },
+    async ({ result_id, view, source, path, block_index, offset, limit }) => {
+      try {
+        let activeView = view ?? "auto";
+        let activeSource = source ?? "auto";
+        let activeBlockIndex = block_index;
+
+        if (activeView === "auto") {
+          const recommendation = await resultStore.inspect(result_id);
+          activeView = recommendation.recommendedView;
+          if (source === undefined && recommendation.source !== undefined) {
+            activeSource = recommendation.source;
+          }
+          if (block_index === undefined && recommendation.blockIndex !== undefined) {
+            activeBlockIndex = recommendation.blockIndex;
+          }
+        }
+
+        let responseData: unknown;
+
+        switch (activeView) {
+          case "envelope": {
+            responseData = await resultStore.readEnvelope(result_id);
+            break;
+          }
+          case "json": {
+            responseData = await resultStore.readJson(result_id, {
+              pointer: path,
+              offset: offset ?? 0,
+              limit,
+              source: activeSource,
+            });
+            break;
+          }
+          case "text": {
+            responseData = await resultStore.readText(result_id, {
+              offset: offset ?? 0,
+              limit,
+              blockIndex: activeBlockIndex,
+              pointer: path,
+              source: activeSource,
+            });
+            break;
+          }
+          case "raw": {
+            responseData = await resultStore.readRaw(result_id, offset ?? 0, limit);
+            break;
+          }
+          default: {
+            return {
+              isError: true,
+              content: [{ type: "text" as const, text: `Unsupported view: ${String(activeView)}` }],
+            };
+          }
+        }
+
+        return {
+          isError: false,
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(responseData, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: `read_result error: ${message}`,
+            },
+          ],
+        };
+      }
+    }
+  );
+
   const start = async () => {
     // Pre-warm any persistent servers (onDemand: false)
     const booted = await pool.bootPersistentServers();
@@ -349,12 +560,14 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
 
   const stop = async () => {
     await pool.stopAll();
+    await resultStore.close();
   };
 
   return {
     server: mcpServer,
     toolIndex,
     pool,
+    resultStore,
     reload,
     start,
     stop,

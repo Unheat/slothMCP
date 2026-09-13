@@ -71,10 +71,17 @@ Full Raw Log (e.g. 100,000 characters)
 
 ---
 
-## 4. Pure In-Memory Zero-State Architecture
+## 4. Progressive Retrieval & Lossless Large-Result Materialization
 
-Unlike other proxies that write every oversized payload to an on-disk database (like BBolt or SQLite) and require an extra `read_cache` tool:
-- SlothMCP runs the entire shaper in **$< 0.01\text{ ms}$ in-memory**.
-- **Zero Disk Accumulation**: Leaves no orphaned files in `/tmp` or `~/.cache`.
-- **Zero Protocol Pollution**: Exposes no artificial cache-reading meta-tools.
-- **Multimodal Safety**: Non-text content blocks (`image`, `audio`, `resource`) pass through completely untouched.
+SlothMCP balances context protection with complete data fidelity:
+
+- **Inline Passthrough ($\le$ 30 KiB)**: Small results pass through directly as verbatim downstream `CallToolResult` objects—preserving JSON structure, `structuredContent`, non-text blocks (`image`, `audio`, `resource`), `_meta`, and `isError`.
+- **Atomic Instance Materialization (> 30 KiB)**: When a tool output exceeds `resultInlineMaxBytes`, Sloth stores the complete unmutated result once in an instance-isolated cache directory (`~/.cache/sloth/results/<instance-id>/<result-id>`) before returning any handle.
+- **Bounded Valid Previews**: `execute_tool` returns a bounded preview (valid structural JSON summary or line-safe text preview) alongside an opaque `result_id`, expiration timestamp, and content manifest.
+- **Lossless Retrieval via `read_result`**: The agent can inspect large results progressively:
+  - `view: 'json'`: Pages complete RFC 6901 JSON Pointer values without broken syntax.
+  - `view: 'text'`: Pages complete lines without slicing UTF-8 code points.
+  - `view: 'envelope'`: Displays content blocks and structured metadata.
+  - `view: 'raw'`: Paginates lossless UTF-8 bytes that concatenate byte-for-byte to the original payload.
+- **No Duplicate Execution**: Downstream write or destructive tools are executed exactly once. Subsequent `read_result` calls read strictly from stored cache.
+- **Zero Long-Term Disk Accumulation**: Storage uses owner-only permissions (`0700`/`0600`), 2-hour TTL eviction, aggregate byte quotas, and automatic cleanup upon clean gateway shutdown.

@@ -4,12 +4,17 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   computeSchemaFingerprint,
+  DEFAULT_RESULT_INLINE_MAX_BYTES,
+  DEFAULT_RESULT_MAX_ENTRY_BYTES,
+  DEFAULT_RESULT_MAX_TOTAL_BYTES,
+  DEFAULT_RESULT_TTL_MS,
   deleteManifest,
   loadAllManifests,
   loadConfig,
   loadManifest,
   saveConfig,
   saveManifest,
+  SlothConfigSchema,
   type ManifestData,
   type SlothConfig,
   type ToolDefinition,
@@ -39,6 +44,10 @@ describe("SlothConfig & Manifest Storage", () => {
   it("returns default empty config when no file exists", () => {
     const config = loadConfig();
     expect(config.idleTimeoutMs).toBe(300_000);
+    expect(config.resultInlineMaxBytes).toBe(DEFAULT_RESULT_INLINE_MAX_BYTES);
+    expect(config.resultTtlMs).toBe(DEFAULT_RESULT_TTL_MS);
+    expect(config.resultMaxEntryBytes).toBe(DEFAULT_RESULT_MAX_ENTRY_BYTES);
+    expect(config.resultMaxTotalBytes).toBe(DEFAULT_RESULT_MAX_TOTAL_BYTES);
     expect(config.servers).toEqual({});
   });
 
@@ -65,6 +74,25 @@ describe("SlothConfig & Manifest Storage", () => {
     expect(loaded.servers.docker.command).toBe("docker-mcp");
     expect(loaded.servers.docker.args).toEqual(["--verbose"]);
     expect(loaded.servers.docker.env?.DOCKER_HOST).toBe("unix:///var/run/docker.sock");
+  });
+
+  it("defaults new result limits for existing configurations", () => {
+    const config = SlothConfigSchema.parse({ servers: {} });
+
+    expect(config.resultInlineMaxBytes).toBe(30 * 1024);
+    expect(config.resultTtlMs).toBe(2 * 60 * 60 * 1000);
+    expect(config.resultMaxEntryBytes).toBe(64 * 1024 * 1024);
+    expect(config.resultMaxTotalBytes).toBe(256 * 1024 * 1024);
+  });
+
+  it("validates positive result limits and quota ordering", () => {
+    expect(() => SlothConfigSchema.parse({ resultInlineMaxBytes: 0 })).toThrow();
+    expect(() =>
+      SlothConfigSchema.parse({ resultInlineMaxBytes: 2_000, resultMaxEntryBytes: 1_000 })
+    ).toThrow(/resultInlineMaxBytes/);
+    expect(() =>
+      SlothConfigSchema.parse({ resultMaxEntryBytes: 2_000, resultMaxTotalBytes: 1_000 })
+    ).toThrow(/resultMaxEntryBytes/);
   });
 
   it("computes deterministic SHA-256 fingerprint independent of tool order", () => {

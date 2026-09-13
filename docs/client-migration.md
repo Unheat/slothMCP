@@ -76,7 +76,7 @@ npx sloth install cursor --migrate
      }
    }
    ```
-6. **Result**: When you open Cursor, the tool menu shows **only Sloth's 3 meta-tools**, cutting token usage by 85% while Sloth lazily manages all 15 servers in the background.
+6. **Result**: When you open Cursor, the tool menu shows **only Sloth's 4 permanent meta-tools**, cutting token usage by ~80% while Sloth lazily manages all 15 servers in the background.
 
 ---
 

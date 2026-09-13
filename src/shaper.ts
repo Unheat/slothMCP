@@ -19,11 +19,27 @@ export const MIN_UNIFORM_ARRAY_LENGTH = 3;
 
 /** Maximum items inspected when verifying schema uniformity across rows */
 export const MAX_UNIFORMITY_CHECK_ITEMS = 20;
+/** Default UTF-8 byte budget for stored-result previews (6 KiB) */
+export const DEFAULT_PREVIEW_MAX_BYTES = 6 * 1024;
+/** Maximum top-level names included in a structural JSON summary */
+export const MAX_JSON_SUMMARY_ITEMS = 20;
+/** Marker used when complete text lines are omitted from a bounded preview */
+export const TEXT_PREVIEW_OMISSION_MARKER = "... [SlothMCP: additional complete lines omitted; use read_result to retrieve them] ...";
 
+/** Options for legacy preview shaping; never use to produce authoritative results. */
 export interface ShaperOptions {
   maxChars?: number; // Hard character ceiling (default: 30,000 chars ~ 7,500 tokens)
   headRatio?: number; // Ratio of budget for head vs tail (default: 0.2 -> 20% head / 80% tail)
   enableTabularization?: boolean; // Default: true
+}
+
+/** Bounded structural description of a JSON value. */
+export interface JsonStructuralSummary {
+  type: "array" | "object" | "string" | "number" | "boolean" | "null";
+  length?: number;
+  keys?: string[];
+  omittedKeys?: number;
+  itemTypes?: string[];
 }
 
 /**
@@ -146,7 +162,100 @@ export function sandwichSlice(
 }
 
 /**
- * Main output shaper entrypoint for tool responses.
+ * Returns stable JSON type name for structural preview metadata.
+ *
+ * @param value - JSON-compatible value to classify
+ * @returns JSON type name, distinguishing arrays and null from objects
+ */
+function getJsonType(value: unknown): JsonStructuralSummary["type"] {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value as JsonStructuralSummary["type"];
+}
+
+/**
+ * Builds bounded structural metadata without serializing partial JSON values.
+ *
+ * @param value - JSON-compatible value to summarize
+ * @param maxItems - Maximum keys or array items inspected and reported
+ * @returns JSON-serializable structural summary
+ */
+export function summarizeJsonStructure(value: unknown, maxItems = MAX_JSON_SUMMARY_ITEMS): JsonStructuralSummary {
+  const itemLimit = Math.max(0, Math.floor(maxItems));
+  const type = getJsonType(value);
+
+  if (Array.isArray(value)) {
+    return {
+      type,
+      length: value.length,
+      itemTypes: [...new Set(value.slice(0, itemLimit).map(getJsonType))],
+    };
+  }
+
+  if (value !== null && typeof value === "object") {
+    const keys = Object.keys(value);
+    return {
+      type,
+      keys: keys.slice(0, itemLimit),
+      omittedKeys: Math.max(0, keys.length - itemLimit),
+    };
+  }
+
+  if (typeof value === "string") return { type, length: value.length };
+  return { type };
+}
+
+/**
+ * Returns longest prefix whose UTF-8 encoding fits a byte budget without splitting Unicode.
+ *
+ * @param text - Source text to bound
+ * @param maxBytes - Maximum UTF-8 bytes returned
+ * @returns Unicode-safe prefix within byte budget
+ */
+export function utf8SafePrefix(text: string, maxBytes: number): string {
+  const byteLimit = Math.max(0, Math.floor(maxBytes));
+  if (Buffer.byteLength(text, "utf8") <= byteLimit) return text;
+
+  let usedBytes = 0;
+  let prefix = "";
+  for (const character of text) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (usedBytes + characterBytes > byteLimit) break;
+    prefix += character;
+    usedBytes += characterBytes;
+  }
+  return prefix;
+}
+
+/**
+ * Creates a bounded preview containing complete text lines only.
+ *
+ * @param text - Source text to preview
+ * @param maxBytes - Maximum UTF-8 bytes returned, including omission marker
+ * @returns Line-safe, Unicode-safe preview within byte budget
+ */
+export function createTextPreview(text: string, maxBytes = DEFAULT_PREVIEW_MAX_BYTES): string {
+  const byteLimit = Math.max(0, Math.floor(maxBytes));
+  if (Buffer.byteLength(text, "utf8") <= byteLimit) return text;
+
+  const marker = utf8SafePrefix(TEXT_PREVIEW_OMISSION_MARKER, byteLimit);
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  if (markerBytes === byteLimit) return marker;
+
+  const lines = text.match(/.*(?:\r\n|\n|\r|$)/gu) ?? [];
+  let preview = "";
+  for (const line of lines) {
+    if (!line) continue;
+    const candidate = `${preview}${line}`;
+    if (Buffer.byteLength(candidate, "utf8") + markerBytes > byteLimit) break;
+    preview = candidate;
+  }
+
+  return preview ? `${preview}${marker}` : marker;
+}
+
+/**
+ * Legacy preview-only output shaper. Never use transformed output as authoritative tool result.
  * 1. Detects JSON payloads and tabularizes uniform arrays (saving 50-70% tokens).
  * 2. Minifies generic JSON objects (stripping redundant whitespace).
  * 3. Enforces the hard character ceiling using Smart Sandwich Slicing.

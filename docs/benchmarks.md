@@ -32,20 +32,20 @@ Measured using `js-tiktoken` and the official OpenAI/Anthropic BPE tokenizer `cl
 ### A. Static Declaration Baseline (Direct MCP Setup)
 In a standard IDE setup, every tool schema is declared in full JSONSchema format on every conversation turn:
 - **Average Schema Size**: ~110 tokens per tool.
-- **Single Turn Schema Dump (32 tools)**: **3,613 tokens / turn**.
-- **10-Turn Conversation Total**: $10 \times 3,613 = \mathbf{36,130\text{ tokens}}$.
+- **Single Turn Schema Dump (32 tools)**: **3,612 tokens / turn**.
+- **10-Turn Conversation Total**: $10 \times 3,612 = \mathbf{36,120\text{ tokens}}$.
 
 ### B. SlothMCP Dynamic Meta-Tool Architecture
-SlothMCP exposes only the 3 meta-tools and the 40-token directory tree:
-- **Fixed Meta-Tools + Taxonomy**: **521 tokens / turn**.
-- **10 Turns of Fixed Meta-Tools**: $10 \times 521 = 5,210\text{ tokens}$.
+SlothMCP exposes 4 permanent meta-tools and the 40-token directory tree:
+- **Fixed Meta-Tools + Taxonomy**: **712 tokens / turn**.
+- **10 Turns of Fixed Meta-Tools**: $10 \times 712 = 7,120\text{ tokens}$.
 - **2 Tool Discovery Lookups**: The model invokes `search_tools` twice, each returning 3 compact 1-line TypeScript signatures: $2 \times 67 = 134\text{ tokens}$.
-- **10-Turn SlothMCP Total**: $5,210 + 134 = \mathbf{5,344\text{ tokens}}$.
+- **10-Turn SlothMCP Total**: $7,120 + 134 = \mathbf{7,254\text{ tokens}}$.
 
 ### C. Net Token Savings Calculation
-$$\text{Net Token Savings} = \frac{36,130 - 5,344}{36,130} \times 100 = \mathbf{85.21\%}$$
+$$\text{Net Token Savings} = \frac{36,120 - 7,254}{36,120} \times 100 = \mathbf{79.92\%}$$
 
-Across an average 10-turn conversation, SlothMCP eliminates **30,786 wasted prompt tokens**.
+Across an average 10-turn conversation, SlothMCP eliminates **28,866 wasted prompt tokens**.
 
 ---
 
@@ -55,8 +55,8 @@ Measured by executing **1,000 search queries** over the indexed tool corpus on a
 
 | Percentile | Latency (µs) | Latency (ms) | Target Ceiling |
 | :--- | :---: | :---: | :---: |
-| **P50 (Median)** | **56 µs** | 0.056 ms | $< 1.0\text{ ms}$ |
-| **P95** | **267 µs** | 0.267 ms | $< 1.0\text{ ms}$ |
+| **P50 (Median)** | **51 µs** | 0.051 ms | $< 1.0\text{ ms}$ |
+| **P95** | **241 µs** | 0.241 ms | $< 1.0\text{ ms}$ |
 | **P99** | **888 µs** | 0.888 ms | $< 5.0\text{ ms}$ |
 
 **Conclusion:** In-memory MiniSearch BM25 search overhead is imperceptible to users and models, completing in less than one-third of a single millisecond at P95.

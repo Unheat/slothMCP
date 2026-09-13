@@ -25,9 +25,9 @@ Unless a system installs an invasive Man-In-The-Middle (MITM) HTTP reverse proxy
 
 ---
 
-## 2. The Three Permanent Meta-Tools
+## 2. The Four Permanent Meta-Tools
 
-SlothMCP exposes exactly three stable meta-tools to the host on session initialization:
+SlothMCP exposes exactly four stable meta-tools to the host on session initialization:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -43,7 +43,11 @@ SlothMCP exposes exactly three stable meta-tools to the host on session initiali
 │                                                                             │
 │ 3. execute_tool(server, tool, arguments)                                    │
 │    Dispatches execution to downstream child processes with automatic        │
-│    argument repair and error isolation.                                     │
+│    argument repair, inline passthrough, and oversized result retention.     │
+│                                                                             │
+│ 4. read_result(result_id, view?, path?, offset?, limit?)                     │
+│    Lossless retrieval of materialized large outputs via complete JSON       │
+│    values, complete text lines, envelope manifests, or raw UTF-8 pages.     │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
