@@ -1,7 +1,10 @@
 import { getEncoding } from "js-tiktoken";
 import { describe, expect, it } from "vitest";
 import {
+  createHighSignalJsonPreview,
+  createLineSandwichPreview,
   createTextPreview,
+  DEFAULT_PREVIEW_MAX_BYTES,
   escapeCsvField,
   isUniformObjectArray,
   sandwichSlice,
@@ -180,5 +183,67 @@ describe("Output Shaper & Context Guard", () => {
     const savingsPct = ((rawTokens - shapedTokens) / rawTokens) * 100;
     expect(savingsPct).toBeGreaterThan(30);
     expect(shaped).toContain("[30]{id,name,image,status,ports}:");
+  });
+
+  it("creates high-signal line sandwich previews preserving head and bottom lines", () => {
+    const lines: string[] = [];
+    lines.push("BUILD START: compiling 100 files...");
+    lines.push("Config: tsconfig.json, target: ES2022");
+    for (let i = 1; i <= 200; i++) {
+      lines.push(`[info] compiled file_${i}.ts in ${i * 2}ms without errors`);
+    }
+    lines.push("ERROR: src/main.ts:42:15 - Type 'string' is not assignable to type 'number'.");
+    lines.push("BUILD FAILED: 1 error encountered. Process exited with code 1.");
+
+    const logText = lines.join("\n");
+    const preview = createLineSandwichPreview(logText, 1024, 0.3);
+
+    expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(1024);
+    // Preserves head
+    expect(preview).toContain("BUILD START: compiling 100 files...");
+    expect(preview).toContain("Config: tsconfig.json");
+    // Preserves tail (critical error & exit code)
+    expect(preview).toContain("ERROR: src/main.ts:42:15");
+    expect(preview).toContain("BUILD FAILED: 1 error encountered. Process exited with code 1.");
+    // Has omission banner with line count
+    expect(preview).toMatch(/\[SlothMCP: \d+ complete lines omitted; use read_result to retrieve them\]/);
+  });
+
+  it("creates high-signal preview for uniform JSON arrays via compact CSV table", () => {
+    const records = Array.from({ length: 100 }, (_, i) => ({
+      id: i,
+      user: `user_${i}`,
+      role: i === 0 ? "admin" : "member",
+      active: true,
+    }));
+
+    const preview = createHighSignalJsonPreview(records, 1024);
+
+    expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(1024);
+    expect(preview).toContain("[100]{id,user,role,active}:");
+    expect(preview).toContain("0,user_0,admin,true");
+    expect(preview).toContain("99,user_99,member,true");
+    expect(preview).toMatch(/\[SlothMCP: \d+ complete lines omitted; use read_result to retrieve them\]/);
+  });
+
+  it("creates high-signal preview for generic JSON arrays with head and tail sample items", () => {
+    const items = Array.from({ length: 50 }, (_, i) => ({
+      seq: i,
+      data: `payload-content-${i}`,
+      nested: { value: i * 10 },
+    }));
+
+    const preview = createHighSignalJsonPreview(items, DEFAULT_PREVIEW_MAX_BYTES);
+    const parsed = JSON.parse(preview);
+
+    expect(parsed._sloth_preview).toBeDefined();
+    expect(parsed._sloth_preview.type).toBe("array");
+    expect(parsed._sloth_preview.totalItems).toBe(50);
+    expect(parsed._sloth_preview.headCount).toBe(3);
+    expect(parsed._sloth_preview.tailCount).toBe(2);
+    expect(parsed.head).toHaveLength(3);
+    expect(parsed.head[0].seq).toBe(0);
+    expect(parsed.tail).toHaveLength(2);
+    expect(parsed.tail[1].seq).toBe(49);
   });
 });

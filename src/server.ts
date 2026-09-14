@@ -17,7 +17,11 @@ import {
   measureCallToolResult,
   recommendResultView,
 } from "./result-store.js";
-import { createTextPreview, summarizeJsonStructure, DEFAULT_PREVIEW_MAX_BYTES } from "./shaper.js";
+import {
+  createTextPreview,
+  createHighSignalJsonPreview,
+  DEFAULT_PREVIEW_MAX_BYTES,
+} from "./shaper.js";
 
 /**
  * Protocol-native guidance sent to every MCP client during initialization.
@@ -359,9 +363,9 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
         previewBlocks.push({ type: "text" as const, text: summaryLines.join("\n") });
 
         if (recommendation.recommendedView === "json") {
-          let previewData: unknown;
+          let previewText = "";
           if (rawResult.structuredContent !== undefined) {
-            previewData = summarizeJsonStructure(rawResult.structuredContent);
+            previewText = createHighSignalJsonPreview(rawResult.structuredContent, DEFAULT_PREVIEW_MAX_BYTES);
           } else if (Array.isArray(rawResult.content) && rawResult.content.length > 0) {
             const first = rawResult.content[0];
             if (
@@ -373,16 +377,16 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
               typeof first.text === "string"
             ) {
               try {
-                previewData = summarizeJsonStructure(JSON.parse(first.text));
+                previewText = createHighSignalJsonPreview(JSON.parse(first.text), DEFAULT_PREVIEW_MAX_BYTES);
               } catch {
-                previewData = createTextPreview(first.text, DEFAULT_PREVIEW_MAX_BYTES);
+                previewText = createTextPreview(first.text, DEFAULT_PREVIEW_MAX_BYTES);
               }
             }
           }
-          if (previewData) {
+          if (previewText) {
             previewBlocks.push({
               type: "text" as const,
-              text: `Preview (${recommendation.source ?? "auto"}):\n${JSON.stringify(previewData, null, 2)}`,
+              text: `Preview (${recommendation.source ?? "auto"}):\n${previewText}`,
             });
           }
         } else if (recommendation.recommendedView === "text") {
@@ -400,6 +404,31 @@ export function createSlothServer(options: CreateServerOptions = {}): SlothServe
               text: `Preview:\n${createTextPreview(first.text, DEFAULT_PREVIEW_MAX_BYTES)}`,
             });
           }
+        } else if (recommendation.recommendedView === "envelope") {
+          const blockSummaries: string[] = [];
+          let firstTextBlockPreview = "";
+          if (Array.isArray(rawResult.content)) {
+            for (let i = 0; i < rawResult.content.length; i++) {
+              const block = rawResult.content[i];
+              if (typeof block === "object" && block !== null && "type" in block) {
+                if (block.type === "text" && "text" in block && typeof block.text === "string") {
+                  blockSummaries.push(`Block ${i} (text, ${Buffer.byteLength(block.text, "utf8")} bytes)`);
+                  if (!firstTextBlockPreview) {
+                    firstTextBlockPreview = createTextPreview(block.text, DEFAULT_PREVIEW_MAX_BYTES);
+                  }
+                } else {
+                  blockSummaries.push(`Block ${i} (${String(block.type)})`);
+                }
+              }
+            }
+          }
+          const envText = firstTextBlockPreview
+            ? `Envelope Summary (${blockSummaries.join(", ")}):\nPreview (block 0):\n${firstTextBlockPreview}`
+            : `Envelope Summary (${blockSummaries.join(", ")})`;
+          previewBlocks.push({
+            type: "text" as const,
+            text: envText,
+          });
         }
 
         return {

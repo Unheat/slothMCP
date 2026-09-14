@@ -150,12 +150,17 @@ describe("SlothMCP Server Gateway Integration", () => {
 
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text: string }>;
-    expect(content.length).toBeGreaterThanOrEqual(1);
+    expect(content.length).toBeGreaterThanOrEqual(2);
 
     const summaryText = content[0].text;
     expect(summaryText).toContain("[SlothMCP] Tool result");
     expect(summaryText).toContain("exceeds inline limit");
     expect(summaryText).toContain("Complete result stored with ID:");
+
+    // Verify preview block contains actual data / tabular items
+    const previewText = content[1].text;
+    expect(previewText).toContain("Preview (structured):");
+    expect(previewText).toContain("items");
 
     const idMatch = summaryText.match(/ID: ([0-9a-f-]{36})/);
     expect(idMatch).not.toBeNull();
@@ -220,6 +225,72 @@ describe("SlothMCP Server Gateway Integration", () => {
     })) as Record<string, unknown>;
     const countContent = countRes.content as Array<{ type: string; text: string }>;
     expect(countContent[0].text).toBe("1");
+
+    await client.close();
+  });
+
+  it("returns high-signal line sandwich preview for oversized text outputs (preserving head and bottom error lines)", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "sloth-test-client", version: "1.0.0" });
+
+    await Promise.all([serverInstance.server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const result = (await client.callTool({
+      name: "execute_tool",
+      arguments: {
+        server: "mock",
+        tool: "oversized_text",
+        arguments: {},
+      },
+    })) as Record<string, unknown>;
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content.length).toBe(2);
+
+    expect(content[0].text).toContain("[SlothMCP] Tool result");
+    expect(content[0].text).toContain("exceeds inline limit");
+
+    const preview = content[1].text;
+    expect(preview).toContain("Preview:");
+    // Preserves top header
+    expect(preview).toContain("--- BUILD INITIATED ---");
+    // Preserves bottom compiler fatal error
+    expect(preview).toContain("--- BUILD FAILURE: FATAL ERROR IN COMPILER CODE 127 ---");
+    // Omission banner
+    expect(preview).toMatch(/\[SlothMCP: \d+ complete lines omitted; use read_result to retrieve them\]/);
+    expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(12 * 1024 + 50);
+
+    await client.close();
+  });
+
+  it("returns block manifest and primary text preview for oversized envelope outputs", async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "sloth-test-client", version: "1.0.0" });
+
+    await Promise.all([serverInstance.server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const result = (await client.callTool({
+      name: "execute_tool",
+      arguments: {
+        server: "mock",
+        tool: "oversized_envelope",
+        arguments: {},
+      },
+    })) as Record<string, unknown>;
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content.length).toBe(2);
+
+    expect(content[0].text).toContain("[SlothMCP] Tool result");
+    expect(content[0].text).toContain("Recommended view: envelope");
+
+    const envText = content[1].text;
+    expect(envText).toContain("Envelope Summary (Block 0 (text,");
+    expect(envText).toContain("Block 1 (text,");
+    expect(envText).toContain("HEAD OF BLOCK 0");
+    expect(envText).toContain("TAIL OF BLOCK 0");
 
     await client.close();
   });

@@ -9,6 +9,7 @@ SlothMCP must preserve downstream `CallToolResult` semantics while keeping overs
 - Measure the UTF-8 serialization of the complete downstream result.
 - Return results at or below `resultInlineMaxBytes` (30 KiB) unchanged.
 - Store complete oversized results before returning a handle.
+- Return high-signal bounded previews: line-based head + tail sandwich for text (preserving headers, errors, and bottom summaries without breaking lines), high-signal samples or tabular CSV for JSON, and block manifest + primary text preview for envelopes.
 - Preserve ordered content blocks, `structuredContent`, `isError`, `_meta`, annotations, resources, images, audio, and compatible extension fields.
 - Never slice JSON and present the fragment as complete JSON.
 - JSON view returns complete values selected by RFC 6901 JSON Pointer.
@@ -21,7 +22,7 @@ SlothMCP must preserve downstream `CallToolResult` semantics while keeping overs
 ## Defaults
 
 - Inline result: 30 KiB (`resultInlineMaxBytes: 30720`).
-- Preview: 6 KiB (`DEFAULT_PREVIEW_MAX_BYTES: 6144`).
+- Preview: 12 KiB (`DEFAULT_PREVIEW_MAX_BYTES: 12288`), using line-based head (30%) + tail (70%) sandwich slicing for text and high-signal sample records or tabular CSV for JSON.
 - Raw page: 24 KiB default, 30 KiB maximum.
 - JSON page: 20 values default, 100 maximum.
 - Text page: 200 lines default, 500 maximum.

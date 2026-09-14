@@ -146,7 +146,7 @@ The model receives 100% global capability visibility upfront for just ~40 tokens
 
 ### 5. Output Shaper & Progressive Large-Result Retrieval
 - **Verbatim Inline Passthrough ($\le$ 30KB):** Small tool responses pass through untouched as verbatim `CallToolResult` envelopes with 100% structural fidelity.
-- **Atomic Large-Result Materialization (> 30KB):** Oversized results run once and are stored in an instance-isolated cache. `execute_tool` returns a bounded, valid preview and `result_id`.
+- **Atomic Large-Result Materialization (> 30KB):** Oversized results run once and are stored in an instance-isolated cache. `execute_tool` returns a bounded, high-signal preview (line-based head + tail sandwich for logs, compact tabular CSV or sample records for JSON) and a `result_id`.
 - **Lossless Paging (`read_result`):** Agents page through results using `json` (complete RFC 6901 JSON values), `text` (complete lines), `envelope` (metadata), or `raw` (exact UTF-8 bytes). Never slices serialized JSON.
 
 ### 6. Self-Healing Argument Auto-Repair
@@ -246,16 +246,16 @@ npm test
 ✓ test/cli.test.ts          (4 tests)
 ✓ test/config.test.ts       (6 tests)
 ✓ test/harnesses.test.ts   (16 tests)
-✓ test/shaper.test.ts       (9 tests)
+✓ test/shaper.test.ts      (12 tests)
 ✓ test/repair.test.ts       (4 tests)
 ✓ test/benchmark.test.ts    (3 tests)
 ✓ test/result-store.test.ts (16 tests)
-✓ test/server.test.ts       (9 tests)
+✓ test/server.test.ts      (11 tests)
 ✓ test/pool.test.ts         (9 tests)
 
 Test Files: 10 passed (10)
-Tests:      81 passed (81)
-Duration:   ~4.2s
+Tests:      86 passed (86)
+Duration:   ~3.5s
 ```
 
 Compile TypeScript:

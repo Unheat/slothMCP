@@ -95,6 +95,40 @@ server.registerTool(
   }
 );
 
+server.registerTool(
+  "oversized_text",
+  {
+    description: "Returns oversized text log with head start and bottom error",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    const lines: string[] = ["--- BUILD INITIATED ---"];
+    for (let i = 1; i <= 400; i++) {
+      lines.push(`[step ${i}] processing module asset ${i} ... padding details ${"y".repeat(80)}`);
+    }
+    lines.push("--- BUILD FAILURE: FATAL ERROR IN COMPILER CODE 127 ---");
+    return {
+      content: [{ type: "text", text: lines.join("\n") }],
+    };
+  }
+);
+
+server.registerTool(
+  "oversized_envelope",
+  {
+    description: "Returns oversized envelope with multiple large blocks",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    return {
+      content: [
+        { type: "text", text: "HEAD OF BLOCK 0\n" + "content-0-line\n".repeat(1500) + "TAIL OF BLOCK 0" },
+        { type: "text", text: "HEAD OF BLOCK 1\n" + "content-1-line\n".repeat(1500) + "TAIL OF BLOCK 1" },
+      ],
+    };
+  }
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error("Mock downstream server ready.");

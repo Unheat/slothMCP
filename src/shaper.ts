@@ -19,10 +19,16 @@ export const MIN_UNIFORM_ARRAY_LENGTH = 3;
 
 /** Maximum items inspected when verifying schema uniformity across rows */
 export const MAX_UNIFORMITY_CHECK_ITEMS = 20;
-/** Default UTF-8 byte budget for stored-result previews (6 KiB) */
-export const DEFAULT_PREVIEW_MAX_BYTES = 6 * 1024;
+/** Default UTF-8 byte budget for stored-result previews (12 KiB) */
+export const DEFAULT_PREVIEW_MAX_BYTES = 12 * 1024;
+/** Default proportion of line preview budget reserved for head (30% head / 70% tail) */
+export const DEFAULT_PREVIEW_HEAD_RATIO = 0.3;
 /** Maximum top-level names included in a structural JSON summary */
 export const MAX_JSON_SUMMARY_ITEMS = 20;
+/** Default number of head items included in high-signal JSON array previews */
+export const DEFAULT_JSON_PREVIEW_HEAD_ITEMS = 3;
+/** Default number of tail items included in high-signal JSON array previews */
+export const DEFAULT_JSON_PREVIEW_TAIL_ITEMS = 2;
 /** Marker used when complete text lines are omitted from a bounded preview */
 export const TEXT_PREVIEW_OMISSION_MARKER = "... [SlothMCP: additional complete lines omitted; use read_result to retrieve them] ...";
 
@@ -228,30 +234,226 @@ export function utf8SafePrefix(text: string, maxBytes: number): string {
 }
 
 /**
+ * Creates a bounded line-based head + tail sandwich preview.
+ * Preserves top lines (head) and bottom lines (tail) without cutting mid-line,
+ * inserting an omission banner in the middle.
+ *
+ * @param text - Source text to preview
+ * @param maxBytes - Maximum UTF-8 bytes allowed (default: 12 KiB)
+ * @param headRatio - Proportion of line budget reserved for head (default: 0.3)
+ * @returns Line-safe, Unicode-safe head + tail preview within byte budget
+ */
+export function createLineSandwichPreview(
+  text: string,
+  maxBytes = DEFAULT_PREVIEW_MAX_BYTES,
+  headRatio = DEFAULT_PREVIEW_HEAD_RATIO
+): string {
+  const byteLimit = Math.max(0, Math.floor(maxBytes));
+  if (Buffer.byteLength(text, "utf8") <= byteLimit) {
+    return text;
+  }
+
+  // Split into lines preserving line terminators
+  const lines = text.match(/.*(?:\r\n|\n|\r|$)/gu)?.filter((l) => l.length > 0) ?? [];
+  if (lines.length === 0) {
+    return utf8SafePrefix(text, byteLimit);
+  }
+
+  const defaultMarker = TEXT_PREVIEW_OMISSION_MARKER;
+  const markerEstBytes = Buffer.byteLength(defaultMarker, "utf8");
+  if (byteLimit <= markerEstBytes) {
+    return utf8SafePrefix(defaultMarker, byteLimit);
+  }
+
+  const lineBudget = byteLimit - markerEstBytes;
+  const headBudget = Math.max(0, Math.floor(lineBudget * headRatio));
+
+  // Collect head lines
+  const headLines: string[] = [];
+  let headBytes = 0;
+  let headIndex = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const lineBytes = Buffer.byteLength(lines[i], "utf8");
+    if (headBytes + lineBytes <= headBudget) {
+      headLines.push(lines[i]);
+      headBytes += lineBytes;
+      headIndex = i + 1;
+    } else {
+      break;
+    }
+  }
+
+  // If head is completely empty but line 0 fits within total line budget, give line 0 to head
+  if (headLines.length === 0 && lines.length > 0) {
+    const line0Bytes = Buffer.byteLength(lines[0], "utf8");
+    if (line0Bytes <= lineBudget) {
+      headLines.push(lines[0]);
+      headBytes += line0Bytes;
+      headIndex = 1;
+    }
+  }
+
+  // Collect tail lines from bottom up using remaining budget
+  const tailLines: string[] = [];
+  let tailBytes = 0;
+  const remainingForTail = Math.max(0, lineBudget - headBytes);
+
+  for (let i = lines.length - 1; i >= headIndex; i--) {
+    const lineBytes = Buffer.byteLength(lines[i], "utf8");
+    if (tailBytes + lineBytes <= remainingForTail) {
+      tailLines.unshift(lines[i]);
+      tailBytes += lineBytes;
+    } else {
+      break;
+    }
+  }
+
+  // If all lines fit without omission
+  if (headLines.length + tailLines.length >= lines.length) {
+    return text;
+  }
+
+  const omittedLines = lines.length - headLines.length - tailLines.length;
+
+  // Format banner: if tail is present, format as sandwich with newlines; if tail is empty, match default marker
+  let banner =
+    tailLines.length > 0
+      ? `\n... [SlothMCP: ${omittedLines} complete lines omitted; use read_result to retrieve them] ...\n`
+      : defaultMarker;
+
+  let headText = headLines.join("");
+  let tailText = tailLines.join("");
+
+  // Ensure total bytes does not exceed byteLimit
+  while (tailLines.length > 0 && Buffer.byteLength(headText + banner + tailText, "utf8") > byteLimit) {
+    tailLines.shift();
+    tailText = tailLines.join("");
+    const curOmitted = lines.length - headLines.length - tailLines.length;
+    banner =
+      tailLines.length > 0
+        ? `\n... [SlothMCP: ${curOmitted} complete lines omitted; use read_result to retrieve them] ...\n`
+        : defaultMarker;
+  }
+
+  while (headLines.length > 1 && Buffer.byteLength(headText + banner + tailText, "utf8") > byteLimit) {
+    headLines.pop();
+    headText = headLines.join("");
+  }
+
+  const combined = `${headText}${banner}${tailText}`;
+  if (Buffer.byteLength(combined, "utf8") <= byteLimit) {
+    return combined;
+  }
+
+  return utf8SafePrefix(combined, byteLimit);
+}
+
+/**
+ * Creates a bounded high-signal preview for structured JSON data.
+ * Uniform object arrays are formatted as compact CSV tables with head + tail rows.
+ * Arbitrary JSON arrays or objects return valid sample structures with omission metadata.
+ *
+ * @param value - Any parsed JSON value
+ * @param maxBytes - Maximum UTF-8 bytes allowed (default: 12 KiB)
+ * @returns Bounded string representation of JSON data
+ */
+export function createHighSignalJsonPreview(
+  value: unknown,
+  maxBytes = DEFAULT_PREVIEW_MAX_BYTES
+): string {
+  // Case 1: Uniform object array -> Tabular CSV with head + tail rows (50-70% token savings)
+  if (isUniformObjectArray(value)) {
+    const csv = tabularizeJsonArray(value);
+    return createLineSandwichPreview(csv, maxBytes, DEFAULT_PREVIEW_HEAD_RATIO);
+  }
+
+  // Case 2: Generic Array -> Sample head items + tail items with explicit metadata
+  if (Array.isArray(value)) {
+    const total = value.length;
+    if (total === 0) return "[]";
+
+    let headCount = Math.min(DEFAULT_JSON_PREVIEW_HEAD_ITEMS, total);
+    let tailCount = Math.min(DEFAULT_JSON_PREVIEW_TAIL_ITEMS, Math.max(0, total - headCount));
+
+    while (headCount > 0 || tailCount > 0) {
+      const headItems = value.slice(0, headCount);
+      const tailItems = tailCount > 0 ? value.slice(total - tailCount) : [];
+      const omitted = total - headCount - tailCount;
+
+      const sampleObj = {
+        _sloth_preview: {
+          type: "array",
+          totalItems: total,
+          headCount,
+          tailCount,
+          omittedCount: omitted,
+        },
+        head: headItems,
+        ...(tailCount > 0 ? { tail: tailItems } : {}),
+      };
+
+      const serialized = JSON.stringify(sampleObj, null, 2);
+      if (Buffer.byteLength(serialized, "utf8") <= maxBytes) {
+        return serialized;
+      }
+
+      if (tailCount > 0) {
+        tailCount--;
+      } else if (headCount > 1) {
+        headCount--;
+      } else {
+        break;
+      }
+    }
+
+    return JSON.stringify(summarizeJsonStructure(value), null, 2);
+  }
+
+  // Case 3: Object with potential large array or many keys
+  if (value !== null && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj);
+
+    const previewObj: Record<string, unknown> = {};
+    for (const k of keys.slice(0, 10)) {
+      const v = obj[k];
+      if (Array.isArray(v) && v.length > 5) {
+        if (isUniformObjectArray(v)) {
+          previewObj[k] = `[${v.length} items tabular preview]:\n` + createHighSignalJsonPreview(v, Math.floor(maxBytes / 2));
+        } else {
+          previewObj[k] = {
+            _sloth_preview: { totalItems: v.length, omitted: v.length - 3 },
+            sample: v.slice(0, 3),
+          };
+        }
+      } else {
+        previewObj[k] = v;
+      }
+    }
+
+    const serialized = JSON.stringify(previewObj, null, 2);
+    if (Buffer.byteLength(serialized, "utf8") <= maxBytes) {
+      return serialized;
+    }
+
+    return createLineSandwichPreview(JSON.stringify(value, null, 2), maxBytes, DEFAULT_PREVIEW_HEAD_RATIO);
+  }
+
+  // Fallback for primitives
+  return createLineSandwichPreview(String(value), maxBytes, DEFAULT_PREVIEW_HEAD_RATIO);
+}
+
+/**
  * Creates a bounded preview containing complete text lines only.
+ * Preserves top lines and bottom lines using line sandwich slicing.
  *
  * @param text - Source text to preview
  * @param maxBytes - Maximum UTF-8 bytes returned, including omission marker
  * @returns Line-safe, Unicode-safe preview within byte budget
  */
 export function createTextPreview(text: string, maxBytes = DEFAULT_PREVIEW_MAX_BYTES): string {
-  const byteLimit = Math.max(0, Math.floor(maxBytes));
-  if (Buffer.byteLength(text, "utf8") <= byteLimit) return text;
-
-  const marker = utf8SafePrefix(TEXT_PREVIEW_OMISSION_MARKER, byteLimit);
-  const markerBytes = Buffer.byteLength(marker, "utf8");
-  if (markerBytes === byteLimit) return marker;
-
-  const lines = text.match(/.*(?:\r\n|\n|\r|$)/gu) ?? [];
-  let preview = "";
-  for (const line of lines) {
-    if (!line) continue;
-    const candidate = `${preview}${line}`;
-    if (Buffer.byteLength(candidate, "utf8") + markerBytes > byteLimit) break;
-    preview = candidate;
-  }
-
-  return preview ? `${preview}${marker}` : marker;
+  return createLineSandwichPreview(text, maxBytes, DEFAULT_PREVIEW_HEAD_RATIO);
 }
 
 /**
