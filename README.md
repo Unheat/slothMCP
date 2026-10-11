@@ -263,3 +263,8 @@ Compile TypeScript:
 ```bash
 npm run build
 ```
+
+## License
+
+[MIT](LICENSE) © 2026 UnHeat and SlothMCP Contributors. Portions adapted from `mcpproxy-go` (MIT).
+
